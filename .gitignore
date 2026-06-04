@@ -1,0 +1,123 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+tour-booking
+tour-booking.exe
+/tmp
+
+# Dependency directories
+vendor/
+node_modules/
+
+# Go workspace files
+*.mod
+*.sum
+go.work
+go.work.sum
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.classpath
+.settings/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded files
+public/img/tours/*
+!public/img/tours/.gitkeep
+uploads/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage.out
+coverage.html
+*.coverprofile
+*.test
+
+# Build outputs
+/dist/
+/build/
+/bin/
+/out/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Swagger docs (optional - commit if you want to keep them)
+# docs/
+
+# Certificates
+*.pem
+*.crt
+*.key
+
+# Backup files
+*.bak
+*.backup
+
+# Debug files
+debug
+debug.test
+
+# Configuration files with secrets
+config/production.yaml
+config/development.yaml
+*.secret.*
+
+# Mock files
+*_mock.go
+
+# Vendor
+/vendor/
+
+# Generated files
+/__debug_bin
+/profile.*
+
+# Docker
+docker-compose.override.yml
+.env.docker.local
+.env.production
+*.tar.gz
+backup/

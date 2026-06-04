@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -75,146 +76,140 @@ func main() {
 
 	// Setup routes
 	r := gin.Default()
+
+	// ========== CORS CONFIGURATION ==========
+	// Allow all origins (development)
+	r.Use(cors.Default())
+
+	// Or custom CORS configuration for production:
+	// r.Use(cors.New(cors.Config{
+	// 	AllowOrigins:     []string{"http://localhost:3000", "https://yourdomain.com"},
+	// 	AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+	// 	AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+	// 	ExposeHeaders:    []string{"Content-Length", "X-RateLimit-Limit", "X-RateLimit-Remaining"},
+	// 	AllowCredentials: true,
+	// 	MaxAge:           12 * time.Hour,
+	// }))
+
+	// ========== LOGGER MIDDLEWARE ==========
+	// Option 1: Gin's default logger (simple)
+	r.Use(gin.Logger())
+
+	// Option 2: Custom JSON logger (uncomment to use)
+	// loggerConfig := middleware.DefaultLoggerConfig()
+	// loggerConfig.LogRequestBody = false
+	// loggerConfig.PrettyPrint = true
+	// r.Use(middleware.Logger(loggerConfig))
+
+	// Option 3: Simple development logger
+	// r.Use(middleware.SimpleLogger())
+
 	r.Use(middleware.ErrorHandler())
 	r.Static("/uploads", "./public")
 
 	// API routes
 	api := r.Group("/api/v1")
 	{
+		// ========== PUBLIC ROUTES (Strict rate limit - 50 per minute) ==========
+		publicGroup := api.Group("/")
+		publicGroup.Use(middleware.PublicLimiter) // Changed from RateLimiter to PublicLimiter
+		{
+			publicGroup.POST("/auth/signup", authController.SignUp)
+			publicGroup.POST("/auth/login", authController.Login)
+			publicGroup.POST("/auth/forgotpassword", authController.ForgotPassword)
+			publicGroup.PATCH("/auth/resetpassword/:token", authController.ResetPassword)
 
-		// ========== PUBLIC ROUTES ==========
-		api.POST("/auth/signup", authController.SignUp)
-		api.POST("/auth/login", authController.Login)
-		api.POST("/auth/forgotpassword", authController.ForgotPassword)
-		api.PATCH("/auth/resetpassword/:token", authController.ResetPassword)
-
-		// Public tour routes
-		api.GET("/tours", tourController.GetAllTours)
-		api.GET("/tours/top-5-cheap", tourController.AliasTopTours, tourController.GetAllTours)
-		api.GET("/tours/tour-stats", tourController.GetTourStats)
-		api.GET("/tours/:id", tourController.GetTour)
-		api.GET("/tours-within/:distance/center/:latlng/unit/:unit", tourController.GetToursWithin)
-		api.GET("/distances/:latlng/unit/:unit", tourController.GetDistances)
+			// Public tour routes
+			publicGroup.GET("/tours", tourController.GetAllTours)
+			publicGroup.GET("/tours/top-5-cheap", tourController.AliasTopTours, tourController.GetAllTours)
+			publicGroup.GET("/tours/tour-stats", tourController.GetTourStats)
+			publicGroup.GET("/tours/:id", tourController.GetTour)
+			publicGroup.GET("/tours-within/:distance/center/:latlng/unit/:unit", tourController.GetToursWithin)
+			publicGroup.GET("/distances/:latlng/unit/:unit", tourController.GetDistances)
+		}
 	}
 
-	// ========== PROTECTED ROUTES (require authentication) ==========
-	// User self-service
-	api.GET("/auth/me", middleware.AuthMiddleware(jwtSecret), authController.GetMe)
-	api.PATCH("/auth/updateme", middleware.AuthMiddleware(jwtSecret), authController.UpdateMe)
-	api.PATCH("/auth/updatepassword", middleware.AuthMiddleware(jwtSecret), authController.UpdatePassword)
-	api.POST("/auth/logout", middleware.AuthMiddleware(jwtSecret), authController.Logout)
-	api.DELETE("/auth/deleteme", middleware.AuthMiddleware(jwtSecret), userController.DeleteMe)
+	// ========== PROTECTED ROUTES (Default rate limit - 100 per minute) ==========
+	protectedGroup := api.Group("/")
+	protectedGroup.Use(middleware.AuthMiddleware(jwtSecret))
+	protectedGroup.Use(middleware.DefaultLimiter) // Changed from RateLimiter to DefaultLimiter
+	{
+		// User self-service
+		protectedGroup.GET("/auth/me", authController.GetMe)
+		protectedGroup.PATCH("/auth/updateme", authController.UpdateMe)
+		protectedGroup.PATCH("/auth/updatepassword", authController.UpdatePassword)
+		protectedGroup.POST("/auth/logout", authController.Logout)
+		protectedGroup.DELETE("/auth/deleteme", userController.DeleteMe)
 
-	// Monthly plan (requires guide or admin)
-	api.GET("/tours/monthly-plan/:year",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide", "guide"),
-		tourController.GetMonthlyPlan)
+		// Monthly plan (requires guide or admin)
+		protectedGroup.GET("/tours/monthly-plan/:year",
+			middleware.AllowRoles("admin", "lead-guide", "guide"),
+			tourController.GetMonthlyPlan)
 
-	// Tour management (requires lead-guide or admin)
-	api.POST("/tours",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		middleware.UploadTourImages(),
-		tourController.CreateTour)
+		// Review routes
+		protectedGroup.GET("/reviews", reviewController.GetAllReviews)
+		protectedGroup.GET("/reviews/:id", reviewController.GetReview)
+		protectedGroup.GET("/tours/:id/reviews", reviewController.GetTourReviews)
+		protectedGroup.POST("/tours/:id/reviews",
+			middleware.AllowRoles("user"),
+			reviewController.CreateReview)
+		protectedGroup.PATCH("/reviews/:id", reviewController.UpdateReview)
+		protectedGroup.DELETE("/reviews/:id", reviewController.DeleteReview)
 
-	api.PATCH("/tours/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		middleware.UploadTourImages(),
-		tourController.UpdateTour)
+		// Booking checkout
+		protectedGroup.GET("/bookings/checkout-session/:tourId", bookingController.GetCheckoutSession)
+	}
 
-	api.DELETE("/tours/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		tourController.DeleteTour)
+	// ========== ADMIN ROUTES (Higher rate limit - 200 per minute) ==========
+	adminGroup := api.Group("/")
+	adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
+	adminGroup.Use(middleware.AllowRoles("admin", "lead-guide"))
+	adminGroup.Use(middleware.AdminLimiter) // Changed from RateLimiter to AdminLimiter
+	{
+		// Tour management
+		adminGroup.POST("/tours",
+			middleware.UploadTourImages(),
+			tourController.CreateTour)
 
-	// Review routes
-	api.GET("/reviews", middleware.AuthMiddleware(jwtSecret), reviewController.GetAllReviews)
-	api.GET("/reviews/:id", middleware.AuthMiddleware(jwtSecret), reviewController.GetReview)
-	api.GET("/tours/:id/reviews", middleware.AuthMiddleware(jwtSecret), reviewController.GetTourReviews)
-	api.POST("/tours/:id/reviews",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("user"),
-		reviewController.CreateReview)
-	api.PATCH("/reviews/:id", middleware.AuthMiddleware(jwtSecret), reviewController.UpdateReview)
-	api.DELETE("/reviews/:id", middleware.AuthMiddleware(jwtSecret), reviewController.DeleteReview)
+		adminGroup.PATCH("/tours/:id",
+			middleware.UploadTourImages(),
+			tourController.UpdateTour)
 
-	// ========== ADMIN ONLY ROUTES ==========
-	api.GET("/users",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin"),
-		userController.GetAllUsers)
+		adminGroup.DELETE("/tours/:id", tourController.DeleteTour)
 
-	api.POST("/users",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin"),
-		userController.CreateUser)
+		// User management
+		adminGroup.GET("/users", userController.GetAllUsers)
+		adminGroup.POST("/users", userController.CreateUser)
+		adminGroup.GET("/users/:id", userController.GetUser)
+		adminGroup.PATCH("/users/:id", userController.UpdateUser)
+		adminGroup.DELETE("/users/:id", userController.DeleteUser)
 
-	api.GET("/users/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin"),
-		userController.GetUser)
+		// Booking management
+		adminGroup.GET("/bookings", bookingController.GetAllBookings)
+		adminGroup.POST("/bookings", bookingController.CreateBooking)
+		adminGroup.GET("/bookings/:id", bookingController.GetBooking)
+		adminGroup.PATCH("/bookings/:id", bookingController.UpdateBooking)
+		adminGroup.DELETE("/bookings/:id", bookingController.DeleteBooking)
+	}
 
-	api.PATCH("/users/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin"),
-		userController.UpdateUser)
-
-	api.DELETE("/users/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin"),
-		userController.DeleteUser)
-
-	// ========== BOOKING ROUTES ==========
-	// Checkout session (authenticated users)
-	api.GET("/bookings/checkout-session/:tourId",
-		middleware.AuthMiddleware(jwtSecret),
-		bookingController.GetCheckoutSession)
-
-	// Payment verification callback - NO AUTH (public)
-	// This is called by Paystack or mock payment page
+	// ========== PUBLIC CALLBACKS (No rate limit) ==========
+	// Payment verification callback - called by Paystack
 	api.GET("/bookings/verify-payment", bookingController.VerifyPayment)
 
-	// Webhook for Paystack - NO AUTH (public)
+	// Webhook for Paystack - called by Paystack
 	api.POST("/bookings/webhook", bookingController.Webhook)
 
-	// Mock payment page - NO AUTH (public for testing)
+	// Mock payment page (for testing only)
 	api.GET("/bookings/mock-payment", bookingController.MockPaymentPage)
 
-	// Booking success page - NO AUTH (public for testing)
+	// Booking success page (for testing only)
 	api.GET("/booking-success", bookingController.BookingSuccess)
 
-	// Admin only booking management (requires auth and admin role)
-	api.GET("/bookings",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		bookingController.GetAllBookings)
-
-	api.POST("/bookings",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		bookingController.CreateBooking)
-
-	api.GET("/bookings/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		bookingController.GetBooking)
-
-	api.PATCH("/bookings/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		bookingController.UpdateBooking)
-
-	api.DELETE("/bookings/:id",
-		middleware.AuthMiddleware(jwtSecret),
-		middleware.AllowRoles("admin", "lead-guide"),
-		bookingController.DeleteBooking)
-
-	// Test endpoint (requires auth)
+	// Test endpoint (requires auth, for development)
 	api.POST("/bookings/test/:tourId",
 		middleware.AuthMiddleware(jwtSecret),
 		bookingController.TestCreateBooking)
+
 	log.Printf("Server starting on port %s", cfg.Port)
 
 	// Debug: Print all routes

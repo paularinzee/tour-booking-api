@@ -1,9 +1,12 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"image/jpeg"
+	"log/slog"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,7 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/paularinzee/natour/pkg/utils"
 )
 
 const (
@@ -27,97 +31,108 @@ type ImageUploadResult struct {
 	Images     []string
 }
 
+// UploadTourImages processes and saves incoming multipart/form-data image payloads.
 func UploadTourImages() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check if this is a multipart request
 		contentType := c.GetHeader("Content-Type")
 		if !strings.HasPrefix(contentType, "multipart/form-data") {
-			c.Next() // Skip if not multipart
+			c.Next()
 			return
 		}
 
-		// Parse multipart form (max 10MB)
+		// Enforce request body sizing limits early at the framework level
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxFileSize)
+
 		if err := c.Request.ParseMultipartForm(maxFileSize); err != nil {
-			c.Next() // Continue even if no files
+			slog.Warn("Image upload rejected: form payload structural error or size limit exceeded", "error", err)
+			c.Error(utils.NewBadRequestError("Invalid multipart payload or file size exceeds maximum constraint"))
+			c.Abort()
 			return
 		}
 
-		// Check if there are actually any files
 		if c.Request.MultipartForm == nil {
 			c.Next()
 			return
 		}
 
-		// Get tour ID (for update) or use temp ID (for create)
 		tourID := c.Param("id")
-		isCreateOperation := tourID == ""
-
-		if isCreateOperation {
+		if tourID == "" {
 			tourID = uuid.New().String()
 		}
 
-		// Create upload directory if not exists
 		if err := os.MkdirAll(uploadPath, 0755); err != nil {
-			c.Next() // Continue even if directory creation fails
+			slog.Error("Infrastructure error: unable to provision upload targets directory", "error", err)
+			// Pass the actual 'err' object into your custom utility instead of a raw string
+			c.Error(utils.NewInternalServerError(err))
+			c.Abort()
 			return
 		}
 
 		result := &ImageUploadResult{
-			Images: []string{},
+			Images: make([]string, 0, 3),
 		}
 
-		// Process imageCover (single file)
-		if imageCoverFile, header, err := c.Request.FormFile("imageCover"); err == nil {
+		// 1. Used '_' to discard the unused header assignment
+		if imageCoverFile, _, err := c.Request.FormFile("imageCover"); err == nil {
 			defer imageCoverFile.Close()
 
-			if !isValidImageType(header.Filename) {
-				c.Next()
-				return
-			}
-
-			if header.Size > maxFileSize {
-				c.Next()
+			if !isValidFileMime(imageCoverFile) {
+				c.Error(utils.NewBadRequestError("Invalid image cover format. Allowed: jpeg, png, webp, gif"))
+				c.Abort()
 				return
 			}
 
 			filename := generateFilename(tourID, "cover", "jpeg")
-			if err := processAndSaveImage(imageCoverFile, filename, imageWidth, imageHeight); err == nil {
-				result.ImageCover = filename
-			}
-		}
-
-		// Process images (multiple files, max 3)
-		if c.Request.MultipartForm != nil && c.Request.MultipartForm.File["images"] != nil {
-			imageFiles := c.Request.MultipartForm.File["images"]
-
-			if len(imageFiles) > 3 {
-				c.Next()
+			if err := processAndSaveImage(imageCoverFile, filename, imageWidth, imageHeight); err != nil {
+				slog.Error("Image processing failed for cover image", "error", err)
+				// 2. Pass the underlying 'err' directly into your internal server error utility
+				c.Error(utils.NewInternalServerError(err))
+				c.Abort()
 				return
 			}
 
-			for i, fileHeader := range imageFiles {
+			result.ImageCover = filename
+		}
+
+		// 2. Process side images (multiple files, maximum 3)
+		if imageFiles := c.Request.MultipartForm.File["images"]; len(imageFiles) > 0 {
+			if len(imageFiles) > 3 {
+				c.Error(utils.NewBadRequestError("Maximum of 3 gallery images allowed"))
+				c.Abort()
+				return
+			}
+
+			// Define scoped block closure function to avoid fd leak tracking anomalies
+			processIteration := func(fileHeader *multipart.FileHeader, index int) error {
 				file, err := fileHeader.Open()
 				if err != nil {
-					continue
+					return err
 				}
 				defer file.Close()
 
-				if !isValidImageType(fileHeader.Filename) {
-					continue
+				if !isValidFileMime(file) {
+					return errors.New("unsupported image format file type detected")
 				}
 
-				if fileHeader.Size > maxFileSize {
-					continue
+				filename := generateFilename(tourID, fmt.Sprintf("image-%d", index+1), "jpeg")
+				if err := processAndSaveImage(file, filename, imageWidth, imageHeight); err != nil {
+					return err
 				}
 
-				filename := generateFilename(tourID, fmt.Sprintf("image-%d", i+1), "jpeg")
-				if err := processAndSaveImage(file, filename, imageWidth, imageHeight); err == nil {
-					result.Images = append(result.Images, filename)
+				result.Images = append(result.Images, filename)
+				return nil
+			}
+
+			for i, fileHeader := range imageFiles {
+				if err := processIteration(fileHeader, i); err != nil {
+					slog.Error("Gallery image processing iteration failed", "error", err, "index", i)
+					c.Error(utils.NewBadRequestError(fmt.Sprintf("Failed processing image at position %d: %v", i+1, err)))
+					c.Abort()
+					return
 				}
 			}
 		}
 
-		// Only store if we actually processed any images
 		if result.ImageCover != "" || len(result.Images) > 0 {
 			c.Set("uploadedImages", result)
 		}
@@ -127,32 +142,27 @@ func UploadTourImages() gin.HandlerFunc {
 }
 
 func processAndSaveImage(file multipart.File, filename string, width, height int) error {
-	// Decode image
+	// Reset file offset marker back to original stream index position
+	if _, err := file.Seek(0, 0); err != nil {
+		return err
+	}
+
 	img, err := imaging.Decode(file)
 	if err != nil {
 		return err
 	}
 
-	// Resize image
 	resizedImg := imaging.Resize(img, width, height, imaging.Lanczos)
-
-	// Create output path
 	outPath := filepath.Join(uploadPath, filename)
 
-	// Create output file
 	out, err := os.Create(outPath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	// Save as JPEG with quality
 	options := &jpeg.Options{Quality: imageQuality}
-	if err := jpeg.Encode(out, resizedImg, options); err != nil {
-		return err
-	}
-
-	return nil
+	return jpeg.Encode(out, resizedImg, options)
 }
 
 func generateFilename(tourID, prefix, ext string) string {
@@ -161,18 +171,31 @@ func generateFilename(tourID, prefix, ext string) string {
 	return fmt.Sprintf("tour-%s-%s-%d-%s.%s", tourID, prefix, timestamp, uniqueID, ext)
 }
 
-func isValidImageType(filename string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	validExts := map[string]bool{
-		".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true,
+func isValidFileMime(file multipart.File) bool {
+	buffer := make([]byte, 512)
+	if _, err := file.Seek(0, 0); err != nil {
+		return false
 	}
-	return validExts[ext]
+	if _, err := file.Read(buffer); err != nil {
+		return false
+	}
+	// Reset pointer for downstream readers
+	if _, err := file.Seek(0, 0); err != nil {
+		return false
+	}
+
+	contentType := http.DetectContentType(buffer)
+	validMimes := map[string]bool{
+		"image/jpeg": true, "image/png": true, "image/webp": true, "image/gif": true,
+	}
+	return validMimes[contentType]
 }
 
-// Helper to get uploaded images from context
 func GetUploadedImages(c *gin.Context) *ImageUploadResult {
 	if val, exists := c.Get("uploadedImages"); exists {
-		return val.(*ImageUploadResult)
+		if result, ok := val.(*ImageUploadResult); ok {
+			return result
+		}
 	}
 	return &ImageUploadResult{}
 }

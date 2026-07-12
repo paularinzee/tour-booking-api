@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -43,7 +42,6 @@ type SignUpRequest struct {
 	Password        string `json:"password" binding:"required,min=8"`
 	PasswordConfirm string `json:"passwordConfirm" binding:"required"`
 	Photo           string `json:"photo"`
-	Role            string `json:"role"`
 }
 
 // SignUpResponse represents the signup response
@@ -53,7 +51,6 @@ type SignUpResponse struct {
 }
 
 // SignUp - POST /api/v1/auth/signup
-
 func (c *AuthController) SignUp(ctx *gin.Context) {
 	var req SignUpRequest
 
@@ -70,27 +67,16 @@ func (c *AuthController) SignUp(ctx *gin.Context) {
 	}
 
 	// Normalize email
-	email := models.NormalizeEmail(req.Email)
+	emailStr := models.NormalizeEmail(req.Email)
 
-	// Check if user already exists
-	var existingUser models.User
-	err := c.userCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(&existingUser)
-	if err == nil {
-		ctx.Error(utils.NewBadRequestError("User with this email already exists"))
-		return
-	}
-	if err != mongo.ErrNoDocuments {
-		ctx.Error(utils.NewInternalServerError(err))
-		return
-	}
-
-	// Create new user
+	// Create new user - Strict production rule: Always default to standard user role during signup
 	user := models.User{
 		ID:              primitive.NewObjectID(),
 		Name:            models.SanitizeName(req.Name),
-		Email:           email,
+		Email:           emailStr,
 		Password:        req.Password,
 		PasswordConfirm: req.PasswordConfirm,
+		Role:            models.RoleUser,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 		Active:          true,
@@ -103,33 +89,20 @@ func (c *AuthController) SignUp(ctx *gin.Context) {
 		user.Photo = "default.jpg"
 	}
 
-	// Set role if provided and valid
-	if req.Role != "" {
-		validRole := false
-		for _, role := range models.ValidRoles() {
-			if models.UserRole(req.Role) == role {
-				validRole = true
-				user.Role = role
-				break
-			}
-		}
-		if !validRole {
-			ctx.Error(utils.NewBadRequestError("Invalid role"))
-			return
-		}
-	} else {
-		user.Role = models.RoleUser
-	}
-
 	// Hash password and validate
 	if err := user.BeforeSave(true); err != nil {
 		ctx.Error(utils.NewBadRequestError(err.Error()))
 		return
 	}
 
-	// Insert user into database
-	_, err = c.userCollection.InsertOne(context.Background(), user)
+	// Insert user into database (Using ctx.Request.Context() for graceful cancellation)
+	_, err := c.userCollection.InsertOne(ctx.Request.Context(), user)
 	if err != nil {
+		// Handle race conditions via MongoDB unique index violation (Error code 11000)
+		if mongo.IsDuplicateKeyError(err) {
+			ctx.Error(utils.NewBadRequestError("User with this email already exists"))
+			return
+		}
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -141,7 +114,6 @@ func (c *AuthController) SignUp(ctx *gin.Context) {
 		return
 	}
 
-	// Return response (excludes sensitive fields)
 	ctx.JSON(201, gin.H{
 		"status": "success",
 		"data": gin.H{
@@ -157,31 +129,22 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// LoginResponse represents the login response
-type LoginResponse struct {
-	User  models.UserResponse `json:"user"`
-	Token string              `json:"token"`
-}
-
 // Login - POST /api/v1/auth/login
-
 func (c *AuthController) Login(ctx *gin.Context) {
 	var req LoginRequest
 
-	// Validate request body
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid request: " + err.Error()))
 		return
 	}
 
-	// Normalize email
-	email := models.NormalizeEmail(req.Email)
+	emailStr := models.NormalizeEmail(req.Email)
 
-	// Find user by email and include password field (normally excluded)
 	var user models.User
-	filter := bson.M{"email": email, "active": true}
+	filter := bson.M{"email": emailStr, "active": true}
 
-	err := c.userCollection.FindOne(context.Background(), filter).Decode(&user)
+	// Context used to drop execution if client cancels
+	err := c.userCollection.FindOne(ctx.Request.Context(), filter).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewUnauthorizedError("Invalid email or password"))
@@ -191,20 +154,17 @@ func (c *AuthController) Login(ctx *gin.Context) {
 		return
 	}
 
-	// Check password
 	if !user.CheckPassword(req.Password) {
 		ctx.Error(utils.NewUnauthorizedError("Invalid email or password"))
 		return
 	}
 
-	// Generate JWT token
 	token, err := user.GenerateJWT(c.jwtSecret, c.jwtExpiresIn)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Return response
 	ctx.JSON(200, gin.H{
 		"status": "success",
 		"data": gin.H{
@@ -215,10 +175,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 }
 
 // GetMe - GET /api/v1/auth/me
-
-// GetMe - GET /api/v1/auth/me
 func (c *AuthController) GetMe(ctx *gin.Context) {
-	// Get user ID from context (set by auth middleware)
 	userID, exists := ctx.Get("userID")
 	if !exists {
 		ctx.Error(utils.NewUnauthorizedError("Not authenticated"))
@@ -237,9 +194,8 @@ func (c *AuthController) GetMe(ctx *gin.Context) {
 		return
 	}
 
-	// Find user
 	var user models.User
-	err = c.userCollection.FindOne(context.Background(), bson.M{"_id": objID, "active": true}).Decode(&user)
+	err = c.userCollection.FindOne(ctx.Request.Context(), bson.M{"_id": objID, "active": true}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewNotFoundError("User not found"))
@@ -258,9 +214,7 @@ func (c *AuthController) GetMe(ctx *gin.Context) {
 }
 
 // UpdateMe - PATCH /api/v1/auth/updateme
-
 func (c *AuthController) UpdateMe(ctx *gin.Context) {
-	// Get user ID from context
 	userID, exists := ctx.Get("userID")
 	if !exists {
 		ctx.Error(utils.NewUnauthorizedError("Not authenticated"))
@@ -279,14 +233,12 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 		return
 	}
 
-	// Only allow updating certain fields
 	var updateData map[string]interface{}
 	if err := ctx.ShouldBindJSON(&updateData); err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid request: " + err.Error()))
 		return
 	}
 
-	// Filter allowed fields
 	allowedFields := map[string]bool{
 		"name":  true,
 		"email": true,
@@ -296,13 +248,20 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 	filteredUpdate := bson.M{}
 	for key, value := range updateData {
 		if allowedFields[key] {
+			// Defend against panic: Safe type assertion check
+			strVal, ok := value.(string)
+			if !ok {
+				ctx.Error(utils.NewBadRequestError("Invalid value type for field: " + key))
+				return
+			}
+
 			if key == "email" {
-				value = models.NormalizeEmail(value.(string))
+				filteredUpdate[key] = models.NormalizeEmail(strVal)
+			} else if key == "name" {
+				filteredUpdate[key] = models.SanitizeName(strVal)
+			} else {
+				filteredUpdate[key] = strVal
 			}
-			if key == "name" {
-				value = models.SanitizeName(value.(string))
-			}
-			filteredUpdate[key] = value
 		}
 	}
 
@@ -312,13 +271,12 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 	}
 
 	filteredUpdate["updatedAt"] = time.Now()
-
 	update := bson.M{"$set": filteredUpdate}
 
 	var updatedUser models.User
 	err = c.userCollection.FindOneAndUpdate(
-		context.Background(),
-		bson.M{"_id": objID},
+		ctx.Request.Context(),
+		bson.M{"_id": objID, "active": true},
 		update,
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updatedUser)
@@ -326,6 +284,10 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewNotFoundError("User not found"))
+			return
+		}
+		if mongo.IsDuplicateKeyError(err) {
+			ctx.Error(utils.NewBadRequestError("Email address is already in use"))
 			return
 		}
 		ctx.Error(utils.NewInternalServerError(err))
@@ -341,9 +303,7 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 }
 
 // UpdatePassword - PATCH /api/v1/auth/updatepassword
-
 func (c *AuthController) UpdatePassword(ctx *gin.Context) {
-	// Get user ID from context
 	userID, exists := ctx.Get("userID")
 	if !exists {
 		ctx.Error(utils.NewUnauthorizedError("Not authenticated"))
@@ -362,7 +322,6 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 		return
 	}
 
-	// Parse request
 	var req struct {
 		PasswordCurrent string `json:"passwordCurrent" binding:"required"`
 		Password        string `json:"password" binding:"required,min=8"`
@@ -374,27 +333,27 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 		return
 	}
 
-	// Check if passwords match
 	if req.Password != req.PasswordConfirm {
 		ctx.Error(utils.NewBadRequestError("Passwords are not the same"))
 		return
 	}
 
-	// Find user with password field
 	var user models.User
-	err = c.userCollection.FindOne(context.Background(), bson.M{"_id": objID}).Decode(&user)
+	err = c.userCollection.FindOne(ctx.Request.Context(), bson.M{"_id": objID, "active": true}).Decode(&user)
 	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			ctx.Error(utils.NewNotFoundError("User not found"))
+			return
+		}
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Check current password
 	if !user.CheckPassword(req.PasswordCurrent) {
 		ctx.Error(utils.NewUnauthorizedError("Your current password is wrong"))
 		return
 	}
 
-	// Update password
 	user.Password = req.Password
 	user.PasswordConfirm = req.PasswordConfirm
 
@@ -403,7 +362,6 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 		return
 	}
 
-	// Save updated password
 	update := bson.M{"$set": bson.M{
 		"password":          user.Password,
 		"passwordChangedAt": user.PasswordChangedAt,
@@ -411,7 +369,7 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 	}}
 
 	err = c.userCollection.FindOneAndUpdate(
-		context.Background(),
+		ctx.Request.Context(),
 		bson.M{"_id": objID},
 		update,
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -422,7 +380,6 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 		return
 	}
 
-	// Generate new JWT token
 	token, err := user.GenerateJWT(c.jwtSecret, c.jwtExpiresIn)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
@@ -438,6 +395,7 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 	})
 }
 
+// ForgotPassword - POST /api/v1/auth/forgotpassword
 func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 	var req struct {
 		Email string `json:"email" binding:"required,email"`
@@ -448,15 +406,13 @@ func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 		return
 	}
 
-	// Normalize email
-	email := models.NormalizeEmail(req.Email)
+	emailStr := models.NormalizeEmail(req.Email)
 
-	// Find user
 	var user models.User
-	err := c.userCollection.FindOne(context.Background(), bson.M{"email": email, "active": true}).Decode(&user)
+	err := c.userCollection.FindOne(ctx.Request.Context(), bson.M{"email": emailStr, "active": true}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			// Don't reveal that user doesn't exist (security best practice)
+			// Masking user presence to protect privacy
 			ctx.JSON(200, gin.H{
 				"status":  "success",
 				"message": "If your email is registered, you will receive a reset link",
@@ -467,29 +423,25 @@ func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 		return
 	}
 
-	// Create reset token
 	resetToken, err := user.CreatePasswordResetToken()
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Save token to database
 	update := bson.M{
 		"$set": bson.M{
 			"passwordResetToken":   user.PasswordResetToken,
 			"passwordResetExpires": user.PasswordResetExpires,
 		},
 	}
-	_, err = c.userCollection.UpdateOne(context.Background(), bson.M{"_id": user.ID}, update)
+	_, err = c.userCollection.UpdateOne(ctx.Request.Context(), bson.M{"_id": user.ID}, update)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Send email with token
 	if err := c.emailSender.SendPasswordResetEmail(user.Email, resetToken); err != nil {
-		// Log error but don't expose to user
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -501,7 +453,6 @@ func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 }
 
 // ResetPassword - PATCH /api/v1/auth/resetpassword/:token
-
 func (c *AuthController) ResetPassword(ctx *gin.Context) {
 	resetToken := ctx.Param("token")
 	if resetToken == "" {
@@ -524,16 +475,18 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 		return
 	}
 
-	// Find user with valid reset token
+	// FIX: Hash the token *before* hitting the DB to safely search by specific token index
+	hash := sha256.Sum256([]byte(resetToken))
+	hashedToken := hex.EncodeToString(hash[:])
+
 	var user models.User
-	now := time.Now()
 	filter := bson.M{
-		"passwordResetToken":   bson.M{"$ne": ""},
-		"passwordResetExpires": bson.M{"$gt": now},
+		"passwordResetToken":   hashedToken,
+		"passwordResetExpires": bson.M{"$gt": time.Now()},
 		"active":               true,
 	}
 
-	err := c.userCollection.FindOne(context.Background(), filter).Decode(&user)
+	err := c.userCollection.FindOne(ctx.Request.Context(), filter).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewBadRequestError("Invalid or expired reset token"))
@@ -543,16 +496,6 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 		return
 	}
 
-	// Verify token
-	hash := sha256.Sum256([]byte(resetToken))
-	hashedToken := hex.EncodeToString(hash[:])
-
-	if user.PasswordResetToken != hashedToken {
-		ctx.Error(utils.NewBadRequestError("Invalid reset token"))
-		return
-	}
-
-	// Update password
 	user.Password = req.Password
 	user.PasswordConfirm = req.PasswordConfirm
 
@@ -561,7 +504,6 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 		return
 	}
 
-	// Clear reset token and update password
 	update := bson.M{
 		"$set": bson.M{
 			"password":             user.Password,
@@ -572,13 +514,12 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 		},
 	}
 
-	_, err = c.userCollection.UpdateOne(context.Background(), bson.M{"_id": user.ID}, update)
+	_, err = c.userCollection.UpdateOne(ctx.Request.Context(), bson.M{"_id": user.ID}, update)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Generate new JWT token
 	token, err := user.GenerateJWT(c.jwtSecret, c.jwtExpiresIn)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
@@ -595,16 +536,13 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 }
 
 // Logout - POST /api/v1/auth/logout
-
 func (c *AuthController) Logout(ctx *gin.Context) {
-	// Get token from Authorization header
 	authHeader := ctx.GetHeader("Authorization")
 	if authHeader == "" {
 		ctx.Error(utils.NewUnauthorizedError("Not authenticated"))
 		return
 	}
 
-	// Extract token
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		ctx.Error(utils.NewUnauthorizedError("Invalid authorization format"))
@@ -613,13 +551,11 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 
 	tokenString := parts[1]
 
-	// Parse token to get expiration
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(c.jwtSecret), nil
 	})
 
 	if err != nil {
-		// Even if token is invalid, still return success
 		ctx.JSON(200, gin.H{
 			"status":  "success",
 			"message": "Logged out successfully",
@@ -627,7 +563,6 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 		return
 	}
 
-	// Get expiration time
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		if exp, ok := claims["exp"]; ok {
 			if expFloat, ok := exp.(float64); ok {
@@ -640,60 +575,5 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 	ctx.JSON(200, gin.H{
 		"status":  "success",
 		"message": "Logged out successfully",
-	})
-}
-
-// CreateAdmin - POST /api/v1/auth/create-admin (TEMPORARY - remove in production)
-func (c *AuthController) CreateAdmin(ctx *gin.Context) {
-	var req struct {
-		Name            string `json:"name" binding:"required"`
-		Email           string `json:"email" binding:"required,email"`
-		Password        string `json:"password" binding:"required,min=8"`
-		PasswordConfirm string `json:"passwordConfirm" binding:"required"`
-	}
-
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(400, gin.H{"status": "error", "message": err.Error()})
-		return
-	}
-
-	if req.Password != req.PasswordConfirm {
-		ctx.JSON(400, gin.H{"status": "error", "message": "Passwords are not the same"})
-		return
-	}
-
-	email := models.NormalizeEmail(req.Email)
-
-	user := models.User{
-		ID:              primitive.NewObjectID(),
-		Name:            req.Name,
-		Email:           email,
-		Password:        req.Password,
-		PasswordConfirm: req.PasswordConfirm,
-		Photo:           "default.jpg",
-		Role:            models.RoleAdmin,
-		Active:          true,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-	}
-
-	if err := user.BeforeSave(true); err != nil {
-		ctx.JSON(400, gin.H{"status": "error", "message": err.Error()})
-		return
-	}
-
-	_, err := c.userCollection.InsertOne(context.Background(), user)
-	if err != nil {
-		ctx.JSON(500, gin.H{"status": "error", "message": err.Error()})
-		return
-	}
-
-	ctx.JSON(201, gin.H{
-		"status":  "success",
-		"message": "Admin user created",
-		"data": gin.H{
-			"email": user.Email,
-			"role":  user.Role,
-		},
 	})
 }

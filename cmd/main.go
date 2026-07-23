@@ -8,6 +8,8 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,14 +21,27 @@ import (
 
 	"github.com/paularinzee/natour/pkg/cache"
 	"github.com/paularinzee/natour/pkg/email"
+
+	// Document package generation point parsed by swag CLI
+	_ "github.com/paularinzee/natour/docs"
 )
 
 // @title Tour Booking API
 // @version 1.0
 // @description Tour booking application API
+// @termsOfService  http://swagger.io/terms/
+
+// @contact.name   API Support
+// @contact.url    http://www.swagger.io/support
+// @contact.email  support@swagger.io
+
 // @host localhost:8080
 // @BasePath /api/v1
 
+// @securityDefinitions.apikey Bearer
+// @in header
+// @name Authorization
+// @description Type "Bearer " followed by a space and your token.
 func main() {
 	// Initialize token blacklist cache
 	cache.InitTokenBlacklist()
@@ -34,16 +49,22 @@ func main() {
 	// Load config
 	cfg := config.LoadConfig()
 
+	// Set up a unified context timeout for database startup connections
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelStartup()
+
 	// Connect to MongoDB
-	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(cfg.MongoURI))
+	client, err := mongo.Connect(startupCtx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		log.Fatal("Failed to connect to MongoDB:", err)
 	}
-	defer client.Disconnect(context.Background())
+	defer func() {
+		if err := client.Disconnect(context.Background()); err != nil {
+			log.Println("Error disconnecting from MongoDB:", err)
+		}
+	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, nil)
+	err = client.Ping(startupCtx, nil)
 	if err != nil {
 		log.Fatal("Could not connect to MongoDB:", err)
 	}
@@ -54,7 +75,7 @@ func main() {
 	// Create indexes
 	createIndexes(db)
 
-	// Initialize controllers
+	// Initialize configurations & values
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		jwtSecret = "your-secret-key-change-in-production"
@@ -63,56 +84,48 @@ func main() {
 
 	emailSender := email.NewMockEmailSender()
 
+	// Initialize controllers
 	authController := controllers.NewAuthController(db, jwtSecret, jwtExpiresIn, emailSender)
 	tourController := controllers.NewTourController(db)
 	reviewController := controllers.NewReviewController(db)
 	userController := controllers.NewUserController(db)
 
-	// Initialize Booking Controller
 	bookingController, err := controllers.NewBookingController(db)
 	if err != nil {
 		log.Fatal("Failed to initialize booking controller:", err)
 	}
 
-	// Setup routes
+	// ========== ROUTER INITIALIZATION ==========
+	// FIX: Instantiate exactly once globally to avoid compiler collision or overwritten settings
 	r := gin.Default()
 
-	// ========== CORS CONFIGURATION ==========
-	// Allow all origins (development)
+	// Register Swagger route
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// ========== GLOBAL MIDDLEWARES & STATICS ==========
+	// Allow all origins (development settings)
 	r.Use(cors.Default())
 
 	// Or custom CORS configuration for production:
 	// r.Use(cors.New(cors.Config{
-	// 	AllowOrigins:     []string{"http://localhost:3000", "https://yourdomain.com"},
-	// 	AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-	// 	AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-	// 	ExposeHeaders:    []string{"Content-Length", "X-RateLimit-Limit", "X-RateLimit-Remaining"},
-	// 	AllowCredentials: true,
-	// 	MaxAge:           12 * time.Hour,
+	//  AllowOrigins:     []string{"http://localhost:3000", "https://yourdomain.com"},
+	//  AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+	//  AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+	//  ExposeHeaders:    []string{"Content-Length", "X-RateLimit-Limit", "X-RateLimit-Remaining"},
+	//  AllowCredentials: true,
+	//  MaxAge:           12 * time.Hour,
 	// }))
 
-	// ========== LOGGER MIDDLEWARE ==========
-	// Option 1: Gin's default logger (simple)
 	r.Use(gin.Logger())
-
-	// Option 2: Custom JSON logger (uncomment to use)
-	// loggerConfig := middleware.DefaultLoggerConfig()
-	// loggerConfig.LogRequestBody = false
-	// loggerConfig.PrettyPrint = true
-	// r.Use(middleware.Logger(loggerConfig))
-
-	// Option 3: Simple development logger
-	// r.Use(middleware.SimpleLogger())
-
 	r.Use(middleware.ErrorHandler())
 	r.Static("/uploads", "./public")
 
-	// API routes
+	// API base group
 	api := r.Group("/api/v1")
 	{
 		// ========== PUBLIC ROUTES (Strict rate limit - 50 per minute) ==========
 		publicGroup := api.Group("/")
-		publicGroup.Use(middleware.PublicLimiter) // Changed from RateLimiter to PublicLimiter
+		publicGroup.Use(middleware.PublicLimiter)
 		{
 			publicGroup.POST("/auth/signup", authController.SignUp)
 			publicGroup.POST("/auth/login", authController.Login)
@@ -127,99 +140,93 @@ func main() {
 			publicGroup.GET("/tours-within/:distance/center/:latlng/unit/:unit", tourController.GetToursWithin)
 			publicGroup.GET("/distances/:latlng/unit/:unit", tourController.GetDistances)
 		}
+
+		// ========== PROTECTED ROUTES (Default rate limit - 100 per minute) ==========
+		protectedGroup := api.Group("/")
+		protectedGroup.Use(middleware.AuthMiddleware(jwtSecret))
+		protectedGroup.Use(middleware.DefaultLimiter)
+		{
+			// User self-service
+			protectedGroup.GET("/auth/me", authController.GetMe)
+			protectedGroup.PATCH("/auth/updateme", authController.UpdateMe)
+			protectedGroup.PATCH("/auth/updatepassword", authController.UpdatePassword)
+			protectedGroup.POST("/auth/logout", authController.Logout)
+			protectedGroup.DELETE("/auth/deleteme", userController.DeleteMe)
+
+			// Monthly plan (requires guide or admin)
+			protectedGroup.GET("/tours/monthly-plan/:year",
+				middleware.AllowRoles("admin", "lead-guide", "guide"),
+				tourController.GetMonthlyPlan)
+
+			// Review routes
+			protectedGroup.GET("/reviews", reviewController.GetAllReviews)
+			protectedGroup.GET("/reviews/:id", reviewController.GetReview)
+			protectedGroup.GET("/tours/:id/reviews", reviewController.GetTourReviews)
+			protectedGroup.POST("/tours/:id/reviews",
+				middleware.AllowRoles("user"),
+				reviewController.CreateReview)
+			protectedGroup.PATCH("/reviews/:id", reviewController.UpdateReview)
+			protectedGroup.DELETE("/reviews/:id", reviewController.DeleteReview)
+
+			// Booking checkout
+			protectedGroup.GET("/bookings/checkout-session/:tourId", bookingController.GetCheckoutSession)
+		}
+
+		// ========== ADMIN ROUTES (Higher rate limit - 200 per minute) ==========
+		adminGroup := api.Group("/")
+		adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
+		adminGroup.Use(middleware.AllowRoles("admin", "lead-guide"))
+		adminGroup.Use(middleware.AdminLimiter)
+		{
+			// Tour management
+			adminGroup.POST("/tours",
+				middleware.UploadTourImages(),
+				tourController.CreateTour)
+
+			adminGroup.PATCH("/tours/:id",
+				middleware.UploadTourImages(),
+				tourController.UpdateTour)
+
+			adminGroup.DELETE("/tours/:id", tourController.DeleteTour)
+
+			// User management
+			adminGroup.GET("/users", userController.GetAllUsers)
+			adminGroup.POST("/users", userController.CreateUser)
+			adminGroup.GET("/users/:id", userController.GetUser)
+			adminGroup.PATCH("/users/:id", userController.UpdateUser)
+			adminGroup.DELETE("/users/:id", userController.DeleteUser)
+
+			// Booking management
+			adminGroup.GET("/bookings", bookingController.GetAllBookings)
+			adminGroup.POST("/bookings", bookingController.CreateBooking)
+			adminGroup.GET("/bookings/:id", bookingController.GetBooking)
+			adminGroup.PATCH("/bookings/:id", bookingController.UpdateBooking)
+			adminGroup.DELETE("/bookings/:id", bookingController.DeleteBooking)
+		}
+
+		// ========== PUBLIC CALLBACKS (No rate limit) ==========
+		// Payment verification callback - called by Paystack
+		api.GET("/bookings/verify-payment", bookingController.VerifyPayment)
+
+		// Webhook for Paystack - called by Paystack
+		api.POST("/bookings/webhook", bookingController.Webhook)
+
+		// Mock payment endpoints (Conditional validation execution should happen inside the method bodies)
+		api.GET("/bookings/mock-payment", bookingController.MockPaymentPage)
 	}
-
-	// ========== PROTECTED ROUTES (Default rate limit - 100 per minute) ==========
-	protectedGroup := api.Group("/")
-	protectedGroup.Use(middleware.AuthMiddleware(jwtSecret))
-	protectedGroup.Use(middleware.DefaultLimiter) // Changed from RateLimiter to DefaultLimiter
-	{
-		// User self-service
-		protectedGroup.GET("/auth/me", authController.GetMe)
-		protectedGroup.PATCH("/auth/updateme", authController.UpdateMe)
-		protectedGroup.PATCH("/auth/updatepassword", authController.UpdatePassword)
-		protectedGroup.POST("/auth/logout", authController.Logout)
-		protectedGroup.DELETE("/auth/deleteme", userController.DeleteMe)
-
-		// Monthly plan (requires guide or admin)
-		protectedGroup.GET("/tours/monthly-plan/:year",
-			middleware.AllowRoles("admin", "lead-guide", "guide"),
-			tourController.GetMonthlyPlan)
-
-		// Review routes
-		protectedGroup.GET("/reviews", reviewController.GetAllReviews)
-		protectedGroup.GET("/reviews/:id", reviewController.GetReview)
-		protectedGroup.GET("/tours/:id/reviews", reviewController.GetTourReviews)
-		protectedGroup.POST("/tours/:id/reviews",
-			middleware.AllowRoles("user"),
-			reviewController.CreateReview)
-		protectedGroup.PATCH("/reviews/:id", reviewController.UpdateReview)
-		protectedGroup.DELETE("/reviews/:id", reviewController.DeleteReview)
-
-		// Booking checkout
-		protectedGroup.GET("/bookings/checkout-session/:tourId", bookingController.GetCheckoutSession)
-	}
-
-	// ========== ADMIN ROUTES (Higher rate limit - 200 per minute) ==========
-	adminGroup := api.Group("/")
-	adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
-	adminGroup.Use(middleware.AllowRoles("admin", "lead-guide"))
-	adminGroup.Use(middleware.AdminLimiter) // Changed from RateLimiter to AdminLimiter
-	{
-		// Tour management
-		adminGroup.POST("/tours",
-			middleware.UploadTourImages(),
-			tourController.CreateTour)
-
-		adminGroup.PATCH("/tours/:id",
-			middleware.UploadTourImages(),
-			tourController.UpdateTour)
-
-		adminGroup.DELETE("/tours/:id", tourController.DeleteTour)
-
-		// User management
-		adminGroup.GET("/users", userController.GetAllUsers)
-		adminGroup.POST("/users", userController.CreateUser)
-		adminGroup.GET("/users/:id", userController.GetUser)
-		adminGroup.PATCH("/users/:id", userController.UpdateUser)
-		adminGroup.DELETE("/users/:id", userController.DeleteUser)
-
-		// Booking management
-		adminGroup.GET("/bookings", bookingController.GetAllBookings)
-		adminGroup.POST("/bookings", bookingController.CreateBooking)
-		adminGroup.GET("/bookings/:id", bookingController.GetBooking)
-		adminGroup.PATCH("/bookings/:id", bookingController.UpdateBooking)
-		adminGroup.DELETE("/bookings/:id", bookingController.DeleteBooking)
-	}
-
-	// ========== PUBLIC CALLBACKS (No rate limit) ==========
-	// Payment verification callback - called by Paystack
-	api.GET("/bookings/verify-payment", bookingController.VerifyPayment)
-
-	// Webhook for Paystack - called by Paystack
-	api.POST("/bookings/webhook", bookingController.Webhook)
-
-	// Mock payment page (for testing only)
-	api.GET("/bookings/mock-payment", bookingController.MockPaymentPage)
-
-	// Booking success page (for testing only)
-	api.GET("/booking-success", bookingController.BookingSuccess)
-
-	// Test endpoint (requires auth, for development)
-	api.POST("/bookings/test/:tourId",
-		middleware.AuthMiddleware(jwtSecret),
-		bookingController.TestCreateBooking)
 
 	log.Printf("Server starting on port %s", cfg.Port)
 
-	// Debug: Print all routes
+	// Debug route mapping trace printer
 	log.Println("\n=== ALL REGISTERED ROUTES ===")
 	for _, route := range r.Routes() {
 		log.Printf("%-6s %s", route.Method, route.Path)
 	}
 	log.Println("=============================")
 
-	r.Run(":" + cfg.Port)
+	if err := r.Run(":" + cfg.Port); err != nil {
+		log.Fatal("Failed to start router instance engine: ", err)
+	}
 }
 
 func createIndexes(db *mongo.Database) {

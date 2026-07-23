@@ -47,25 +47,23 @@ func GetUploadedImages(ctx *gin.Context) *middleware.ImageUploadResult {
 	}
 }
 
-// GetAllTours - GET /api/v1/tours
-// GetAllTours godoc
-// @Summary Get all tours
-// @Description Get list of all tours with filtering, sorting, and pagination
-// @Tags Tours
-// @Param page query int false "Page number" default(1)
-// @Param limit query int false "Items per page" default(100)
-// @Param sort query string false "Sort by field (prefix - for descending)"
-// @Param fields query string false "Comma separated fields to return"
-// @Success 200 {object} map[string]interface{}
-// @Router /tours [get]
+// GetAllTours Godoc
+// @Summary      Get all tours
+// @Description  Get a paginated, sorted, and filtered list of tours
+// @Tags         Tours
+// @Produce      json
+// @Param        page    query     int     false  "Page number" default(1)
+// @Param        limit   query     int     false  "Number of items per page" default(100)
+// @Param        sort    query     string  false  "Sort fields (e.g. -price,ratingsAverage)"
+// @Param        fields  query     string  false  "Comma separated fields to return"
+// @Success      200     {object}  map[string]interface{}
+// @Failure      500     {object}  utils.AppError
+// @Router       /tours [get]
 func (c *TourController) GetAllTours(ctx *gin.Context) {
-	// Build filter
+	reqCtx := ctx.Request.Context()
 	filter := bson.M{"secretTour": false}
-
-	// Build options
 	findOptions := options.Find()
 
-	// Fields
 	if fields := ctx.Query("fields"); fields != "" {
 		projection := bson.M{}
 		for _, field := range strings.Split(fields, ",") {
@@ -74,7 +72,6 @@ func (c *TourController) GetAllTours(ctx *gin.Context) {
 		findOptions.SetProjection(projection)
 	}
 
-	// Sort
 	if sort := ctx.Query("sort"); sort != "" {
 		sortFields := bson.D{}
 		for _, field := range strings.Split(sort, ",") {
@@ -89,7 +86,6 @@ func (c *TourController) GetAllTours(ctx *gin.Context) {
 		findOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	}
 
-	// Pagination
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(ctx.DefaultQuery("limit", "100"))
 	skip := (page - 1) * limit
@@ -97,21 +93,20 @@ func (c *TourController) GetAllTours(ctx *gin.Context) {
 	findOptions.SetSkip(int64(skip))
 	findOptions.SetLimit(int64(limit))
 
-	// Check if alias is set
 	if alias := ctx.GetString("alias"); alias == "top" {
 		findOptions.SetSort(bson.D{{Key: "ratingsAverage", Value: -1}, {Key: "price", Value: 1}})
 		findOptions.SetLimit(5)
 	}
 
-	cursor, err := c.collection.Find(context.Background(), filter, findOptions)
+	cursor, err := c.collection.Find(reqCtx, filter, findOptions)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var tours []models.Tour
-	if err = cursor.All(context.Background(), &tours); err != nil {
+	if err = cursor.All(reqCtx, &tours); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -123,10 +118,21 @@ func (c *TourController) GetAllTours(ctx *gin.Context) {
 	})
 }
 
-// GetTour - GET /api/v1/tours/:id
-
+// GetTour Godoc
+// @Summary      Get tour by ID
+// @Description  Get a single tour by ID including associated user reviews
+// @Tags         Tours
+// @Produce      json
+// @Param        id   path      string  true  "Tour ID"
+// @Success      200  {object}  map[string]interface{}
+// @Failure      400  {object}  utils.AppError
+// @Failure      404  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /tours/{id} [get]
 func (c *TourController) GetTour(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
 	id := ctx.Param("id")
+
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid tour ID"))
@@ -136,7 +142,7 @@ func (c *TourController) GetTour(ctx *gin.Context) {
 	filter := bson.M{"_id": objID, "secretTour": false}
 
 	var tour models.Tour
-	err = c.collection.FindOne(context.Background(), filter).Decode(&tour)
+	err = c.collection.FindOne(reqCtx, filter).Decode(&tour)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewNotFoundError("Tour not found"))
@@ -146,19 +152,39 @@ func (c *TourController) GetTour(ctx *gin.Context) {
 		return
 	}
 
-	// Populate reviews for this tour
 	reviewCollection := c.collection.Database().Collection("reviews")
-	cursor, err := reviewCollection.Find(context.Background(), bson.M{"tour": objID})
+	cursor, err := reviewCollection.Find(reqCtx, bson.M{"tour": objID})
 	if err == nil {
-		defer cursor.Close(context.Background())
+		defer cursor.Close(reqCtx)
 		var reviews []models.Review
-		if err = cursor.All(context.Background(), &reviews); err == nil {
-			// Populate user data for each review
+		if err = cursor.All(reqCtx, &reviews); err == nil && len(reviews) > 0 {
+			userIDs := make([]primitive.ObjectID, 0, len(reviews))
+			userIDMap := make(map[primitive.ObjectID]bool)
+
+			for _, review := range reviews {
+				if !userIDMap[review.UserID] {
+					userIDMap[review.UserID] = true
+					userIDs = append(userIDs, review.UserID)
+				}
+			}
+
 			userCollection := c.collection.Database().Collection("users")
-			for i := range reviews {
-				var user models.User
-				userCollection.FindOne(context.Background(), bson.M{"_id": reviews[i].UserID}).Decode(&user)
-				reviews[i].User = &user
+			userCursor, err := userCollection.Find(reqCtx, bson.M{"_id": bson.M{"$in": userIDs}})
+			if err == nil {
+				defer userCursor.Close(reqCtx)
+				var users []models.User
+				if err = userCursor.All(reqCtx, &users); err == nil {
+					userMap := make(map[primitive.ObjectID]models.User, len(users))
+					for _, user := range users {
+						userMap[user.ID] = user
+					}
+
+					for i := range reviews {
+						if u, ok := userMap[reviews[i].UserID]; ok {
+							reviews[i].User = &u
+						}
+					}
+				}
 			}
 			tour.Reviews = reviews
 		}
@@ -170,19 +196,28 @@ func (c *TourController) GetTour(ctx *gin.Context) {
 	})
 }
 
-// CreateTour - POST /api/v1/tours
-
+// CreateTour Godoc
+// @Summary      Create a new tour
+// @Description  Create a tour via JSON or multipart/form-data
+// @Tags         Tours
+// @Accept       json,multipart/form-data
+// @Produce      json
+// @Security     Bearer
+// @Param        tour  body      models.Tour  false  "Tour payload (if JSON)"
+// @Success      201   {object}  map[string]interface{}
+// @Failure      400   {object}  utils.AppError
+// @Failure      401   {object}  utils.AppError
+// @Failure      500   {object}  utils.AppError
+// @Router       /tours/tours [post]
 func (c *TourController) CreateTour(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
 	var tour models.Tour
 
-	// Check content type to determine how to parse
 	contentType := ctx.GetHeader("Content-Type")
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
-		// Handle multipart form with images
 		uploadedImages := GetUploadedImages(ctx)
 
-		// Bind form values
 		tour.Name = ctx.PostForm("name")
 		tour.Duration, _ = strconv.Atoi(ctx.PostForm("duration"))
 		tour.Price, _ = strconv.ParseFloat(ctx.PostForm("price"), 64)
@@ -191,12 +226,10 @@ func (c *TourController) CreateTour(ctx *gin.Context) {
 		tour.Description = ctx.PostForm("description")
 		tour.MaxGroupSize, _ = strconv.Atoi(ctx.PostForm("maxGroupSize"))
 
-		// Handle price discount if provided
 		if priceDiscount := ctx.PostForm("priceDiscount"); priceDiscount != "" {
 			tour.PriceDiscount, _ = strconv.ParseFloat(priceDiscount, 64)
 		}
 
-		// Set image paths from uploaded files
 		if uploadedImages.ImageCover != "" {
 			tour.ImageCover = uploadedImages.ImageCover
 		}
@@ -204,7 +237,6 @@ func (c *TourController) CreateTour(ctx *gin.Context) {
 			tour.Images = uploadedImages.Images
 		}
 
-		// Handle start location if provided as JSON string
 		if startLocation := ctx.PostForm("startLocation"); startLocation != "" {
 			var location models.StartLocation
 			if err := json.Unmarshal([]byte(startLocation), &location); err == nil {
@@ -212,7 +244,6 @@ func (c *TourController) CreateTour(ctx *gin.Context) {
 			}
 		}
 
-		// Handle locations array if provided as JSON string
 		if locations := ctx.PostForm("locations"); locations != "" {
 			var locs []models.Location
 			if err := json.Unmarshal([]byte(locations), &locs); err == nil {
@@ -220,36 +251,31 @@ func (c *TourController) CreateTour(ctx *gin.Context) {
 			}
 		}
 
-		// Handle start dates if provided as JSON string
 		if startDates := ctx.PostForm("startDates"); startDates != "" {
 			var dates []time.Time
 			if err := json.Unmarshal([]byte(startDates), &dates); err == nil {
 				tour.StartDates = dates
 			}
 		}
-
 	} else {
-		// Handle JSON request
 		if err := ctx.ShouldBindJSON(&tour); err != nil {
 			ctx.Error(utils.NewBadRequestError("Invalid request body: " + err.Error()))
 			return
 		}
 	}
 
-	// Generate slug and set defaults
 	tour.Slug = models.GenerateSlug(tour.Name)
 	tour.CreatedAt = time.Now()
 	tour.RatingsAverage = models.DefaultRating
 	tour.RatingsQuantity = 0
 	tour.ID = primitive.NewObjectID()
 
-	// Validate tour
 	if err := validateTour(tour); err != nil {
 		ctx.Error(utils.NewBadRequestError(err.Error()))
 		return
 	}
 
-	result, err := c.collection.InsertOne(context.Background(), tour)
+	result, err := c.collection.InsertOne(reqCtx, tour)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
@@ -263,10 +289,25 @@ func (c *TourController) CreateTour(ctx *gin.Context) {
 	})
 }
 
-// UpdateTour - PATCH /api/v1/tours/:id
-
+// UpdateTour Godoc
+// @Summary      Update an existing tour
+// @Description  Update tour details by ID
+// @Tags         Tours
+// @Accept       json,multipart/form-data
+// @Produce      json
+// @Security     Bearer
+// @Param        id    path      string       true   "Tour ID"
+// @Param        tour  body      models.Tour  false  "Partial Tour updates"
+// @Success      200   {object}  map[string]interface{}
+// @Failure      400   {object}  utils.AppError
+// @Failure      401   {object}  utils.AppError
+// @Failure      404   {object}  utils.AppError
+// @Failure      500   {object}  utils.AppError
+// @Router       /tours/{id} [patch]
 func (c *TourController) UpdateTour(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
 	id := ctx.Param("id")
+
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid tour ID"))
@@ -274,22 +315,16 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 	}
 
 	updateData := bson.M{}
-
-	// Check content type to determine how to parse
 	contentType := ctx.GetHeader("Content-Type")
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
-		// Handle multipart form with images
-
-		// Get uploaded images from middleware
 		if uploadedImages, exists := ctx.Get("uploadedImages"); exists {
 			images := uploadedImages.(*middleware.ImageUploadResult)
 
-			// Delete old images before updating with new ones
 			if images.ImageCover != "" || len(images.Images) > 0 {
-				if err := c.replaceImages(ctx, objID, images.ImageCover, images.Images); err != nil {
-					// Log error but continue
-					fmt.Printf("Warning: Could not delete old images: %v\n", err)
+				if err := c.replaceImages(reqCtx, objID, images.ImageCover, images.Images); err != nil {
+					ctx.Error(err)
+					return
 				}
 			}
 
@@ -301,7 +336,6 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 			}
 		}
 
-		// Handle regular form fields
 		if name := ctx.PostForm("name"); name != "" {
 			updateData["name"] = name
 			updateData["slug"] = models.GenerateSlug(name)
@@ -335,13 +369,7 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 				updateData["priceDiscount"] = pd
 			}
 		}
-		if ratingsAverage := ctx.PostForm("ratingsAverage"); ratingsAverage != "" {
-			if ra, err := strconv.ParseFloat(ratingsAverage, 64); err == nil {
-				updateData["ratingsAverage"] = ra
-			}
-		}
 
-		// Handle JSON string fields
 		if startLocation := ctx.PostForm("startLocation"); startLocation != "" {
 			var location models.StartLocation
 			if err := json.Unmarshal([]byte(startLocation), &location); err == nil {
@@ -362,16 +390,14 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 		}
 
 	} else {
-		// Handle JSON request
 		var jsonData map[string]interface{}
 		if err := ctx.ShouldBindJSON(&jsonData); err != nil {
 			ctx.Error(utils.NewBadRequestError("Invalid request body: " + err.Error()))
 			return
 		}
 
-		// If name is updated, update slug too
-		if name, ok := jsonData["name"]; ok {
-			jsonData["slug"] = models.GenerateSlug(name.(string))
+		if name, ok := jsonData["name"].(string); ok {
+			jsonData["slug"] = models.GenerateSlug(name)
 		}
 
 		updateData = jsonData
@@ -385,7 +411,7 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 	update := bson.M{"$set": updateData}
 
 	result := c.collection.FindOneAndUpdate(
-		context.Background(),
+		reqCtx,
 		bson.M{"_id": objID},
 		update,
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -407,16 +433,16 @@ func (c *TourController) UpdateTour(ctx *gin.Context) {
 	})
 }
 
-// replaceImages deletes old images when updating with new ones
-func (c *TourController) replaceImages(ctx *gin.Context, tourID primitive.ObjectID, newImageCover string, newImages []string) error {
-	// Get existing tour
+func (c *TourController) replaceImages(ctx context.Context, tourID primitive.ObjectID, newImageCover string, newImages []string) error {
 	var existingTour models.Tour
-	err := c.collection.FindOne(context.Background(), bson.M{"_id": tourID}).Decode(&existingTour)
+	err := c.collection.FindOne(ctx, bson.M{"_id": tourID}).Decode(&existingTour)
 	if err != nil {
-		return err
+		if err == mongo.ErrNoDocuments {
+			return utils.NewNotFoundError("Tour not found")
+		}
+		return utils.NewInternalServerError(err)
 	}
 
-	// Delete old images if they are being replaced
 	if newImageCover != "" && existingTour.ImageCover != "" {
 		utils.DeleteImages(existingTour.ImageCover)
 	}
@@ -428,19 +454,31 @@ func (c *TourController) replaceImages(ctx *gin.Context, tourID primitive.Object
 	return nil
 }
 
-// DeleteTour - DELETE /api/v1/tours/:id
-
+// DeleteTour Godoc
+// @Summary      Delete a tour
+// @Description  Delete a tour by ID and remove associated files
+// @Tags         Tours
+// @Produce      json
+// @Security     Bearer
+// @Param        id   path      string  true  "Tour ID"
+// @Success      204  "No Content"
+// @Failure      400  {object}  utils.AppError
+// @Failure      401  {object}  utils.AppError
+// @Failure      404  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /tours/{id} [delete]
 func (c *TourController) DeleteTour(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
 	id := ctx.Param("id")
+
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid tour ID"))
 		return
 	}
 
-	// First, find the tour to get image filenames
 	var tour models.Tour
-	err = c.collection.FindOne(context.Background(), bson.M{"_id": objID}).Decode(&tour)
+	err = c.collection.FindOne(reqCtx, bson.M{"_id": objID}).Decode(&tour)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewNotFoundError("Tour not found"))
@@ -450,11 +488,17 @@ func (c *TourController) DeleteTour(ctx *gin.Context) {
 		return
 	}
 
-	// Delete associated images from file system
-	utils.DeleteImages(append([]string{tour.ImageCover}, tour.Images...)...)
+	toDelete := make([]string, 0, len(tour.Images)+1)
+	if tour.ImageCover != "" {
+		toDelete = append(toDelete, tour.ImageCover)
+	}
+	toDelete = append(toDelete, tour.Images...)
 
-	// Delete the tour from database
-	result, err := c.collection.DeleteOne(context.Background(), bson.M{"_id": objID})
+	if len(toDelete) > 0 {
+		utils.DeleteImages(toDelete...)
+	}
+
+	result, err := c.collection.DeleteOne(reqCtx, bson.M{"_id": objID})
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
@@ -468,24 +512,32 @@ func (c *TourController) DeleteTour(ctx *gin.Context) {
 	ctx.JSON(204, gin.H{"status": "success", "data": nil})
 }
 
-// CleanupOrphanedImages - DELETE /api/v1/admin/tours/cleanup/images
-
+// CleanupOrphanedImages Godoc
+// @Summary      Clean up orphaned tour images
+// @Description  Deletes unreferenced files from disk (Admin only)
+// @Tags         Tours
+// @Produce      json
+// @Security     Bearer
+// @Success      200  {object}  map[string]interface{}
+// @Failure      401  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /admin/tours/cleanup/images [delete]
 func (c *TourController) CleanupOrphanedImages(ctx *gin.Context) {
-	// Get all tours
+	reqCtx := ctx.Request.Context()
+
 	var tours []models.Tour
-	cursor, err := c.collection.Find(context.Background(), bson.M{})
+	cursor, err := c.collection.Find(reqCtx, bson.M{})
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
-	if err = cursor.All(context.Background(), &tours); err != nil {
+	if err = cursor.All(reqCtx, &tours); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
 
-	// Build a set of referenced images
 	referencedImages := make(map[string]bool)
 	for _, tour := range tours {
 		if tour.ImageCover != "" {
@@ -496,7 +548,6 @@ func (c *TourController) CleanupOrphanedImages(ctx *gin.Context) {
 		}
 	}
 
-	// Read all files in upload directory
 	uploadPath := "public/img/tours"
 	files, err := os.ReadDir(uploadPath)
 	if err != nil {
@@ -504,7 +555,6 @@ func (c *TourController) CleanupOrphanedImages(ctx *gin.Context) {
 		return
 	}
 
-	// Delete orphaned images
 	deletedCount := 0
 	for _, file := range files {
 		if !file.IsDir() {
@@ -527,9 +577,17 @@ func (c *TourController) CleanupOrphanedImages(ctx *gin.Context) {
 	})
 }
 
-// GetTourStats - GET /api/v1/tours/stats
-
+// GetTourStats Godoc
+// @Summary      Get tour aggregate statistics
+// @Description  Calculates aggregated stats grouped by difficulty
+// @Tags         Tours
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Failure      500  {object}  utils.AppError
+// @Router       /tours/stats [get]
 func (c *TourController) GetTourStats(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"ratingsAverage": bson.M{"$gte": 4.5}}}},
 		{{Key: "$group", Value: bson.M{
@@ -544,15 +602,15 @@ func (c *TourController) GetTourStats(ctx *gin.Context) {
 		{{Key: "$sort", Value: bson.M{"avgPrice": 1}}},
 	}
 
-	cursor, err := c.collection.Aggregate(context.Background(), pipeline)
+	cursor, err := c.collection.Aggregate(reqCtx, pipeline)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var stats []bson.M
-	if err = cursor.All(context.Background(), &stats); err != nil {
+	if err = cursor.All(reqCtx, &stats); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -563,9 +621,19 @@ func (c *TourController) GetTourStats(ctx *gin.Context) {
 	})
 }
 
-// GetMonthlyPlan - GET /api/v1/tours/monthly-plan/:year
-
+// GetMonthlyPlan Godoc
+// @Summary      Get monthly tour plan for a given year
+// @Description  Calculates monthly schedule count for tours
+// @Tags         Tours
+// @Produce      json
+// @Param        year  path      int  true  "Year (e.g. 2026)"
+// @Success      200   {object}  map[string]interface{}
+// @Failure      400   {object}  utils.AppError
+// @Failure      500   {object}  utils.AppError
+// @Router       /monthly-plan/{year} [get]
 func (c *TourController) GetMonthlyPlan(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	year, err := strconv.Atoi(ctx.Param("year"))
 	if err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid year"))
@@ -594,15 +662,15 @@ func (c *TourController) GetMonthlyPlan(ctx *gin.Context) {
 		{{Key: "$limit", Value: 12}},
 	}
 
-	cursor, err := c.collection.Aggregate(context.Background(), pipeline)
+	cursor, err := c.collection.Aggregate(reqCtx, pipeline)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var plan []bson.M
-	if err = cursor.All(context.Background(), &plan); err != nil {
+	if err = cursor.All(reqCtx, &plan); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -614,9 +682,21 @@ func (c *TourController) GetMonthlyPlan(ctx *gin.Context) {
 	})
 }
 
-// GetToursWithin - GET /api/v1/tours-within/:distance/center/:latlng/unit/:unit
-
+// GetToursWithin Godoc
+// @Summary      Get tours within a specified radius
+// @Description  Geospatial query to fetch tours near a center point
+// @Tags         Tours
+// @Produce      json
+// @Param        distance  path      number  true  "Radius distance"
+// @Param        latlng    path      string  true  "Latitude and Longitude (lat,lng)"
+// @Param        unit      path      string  true  "Unit: 'mi' or 'km'"
+// @Success      200       {object}  map[string]interface{}
+// @Failure      400       {object}  utils.AppError
+// @Failure      500       {object}  utils.AppError
+// @Router       /tours/tours-within/{distance}/center/{latlng}/unit/{unit} [get]
 func (c *TourController) GetToursWithin(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	distance, err := strconv.ParseFloat(ctx.Param("distance"), 64)
 	if err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid distance"))
@@ -628,7 +708,7 @@ func (c *TourController) GetToursWithin(ctx *gin.Context) {
 
 	parts := strings.Split(latlng, ",")
 	if len(parts) != 2 {
-		ctx.Error(utils.NewBadRequestError("Please provide latitude and longitude in the format lat,lng"))
+		ctx.Error(utils.NewBadRequestError("Please provide latitude and longitude in format lat,lng"))
 		return
 	}
 
@@ -659,15 +739,15 @@ func (c *TourController) GetToursWithin(ctx *gin.Context) {
 		},
 	}
 
-	cursor, err := c.collection.Find(context.Background(), filter)
+	cursor, err := c.collection.Find(reqCtx, filter)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var tours []models.Tour
-	if err = cursor.All(context.Background(), &tours); err != nil {
+	if err = cursor.All(reqCtx, &tours); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -679,15 +759,26 @@ func (c *TourController) GetToursWithin(ctx *gin.Context) {
 	})
 }
 
-// GetDistances - GET /api/v1/distances/:latlng/unit/:unit
-
+// GetDistances Godoc
+// @Summary      Get distances from point to all tour starting locations
+// @Description  Calculates distance from latlng to each tour start point
+// @Tags         Tours
+// @Produce      json
+// @Param        latlng  path      string  true  "Latitude and Longitude (lat,lng)"
+// @Param        unit    path      string  true  "Unit: 'mi' or 'km'"
+// @Success      200     {object}  map[string]interface{}
+// @Failure      400     {object}  utils.AppError
+// @Failure      500     {object}  utils.AppError
+// @Router       /distances/{latlng}/unit/{unit} [get]
 func (c *TourController) GetDistances(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	latlng := ctx.Param("latlng")
 	unit := ctx.Param("unit")
 
 	parts := strings.Split(latlng, ",")
 	if len(parts) != 2 {
-		ctx.Error(utils.NewBadRequestError("Please provide latitude and longitude in the format lat,lng"))
+		ctx.Error(utils.NewBadRequestError("Please provide latitude and longitude in format lat,lng"))
 		return
 	}
 
@@ -725,15 +816,15 @@ func (c *TourController) GetDistances(ctx *gin.Context) {
 		}}},
 	}
 
-	cursor, err := c.collection.Aggregate(context.Background(), pipeline)
+	cursor, err := c.collection.Aggregate(reqCtx, pipeline)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var distances []bson.M
-	if err = cursor.All(context.Background(), &distances); err != nil {
+	if err = cursor.All(reqCtx, &distances); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -744,13 +835,12 @@ func (c *TourController) GetDistances(ctx *gin.Context) {
 	})
 }
 
-// Helper validation function
 func validateTour(tour models.Tour) error {
 	if len(tour.Name) < models.MinNameLength {
-		return fmt.Errorf("tour name must have more or equal than %d characters", models.MinNameLength)
+		return fmt.Errorf("tour name must have at least %d characters", models.MinNameLength)
 	}
 	if len(tour.Name) > models.MaxNameLength {
-		return fmt.Errorf("tour name must have less or equal than %d characters", models.MaxNameLength)
+		return fmt.Errorf("tour name must have at most %d characters", models.MaxNameLength)
 	}
 
 	validDifficulty := false

@@ -50,7 +50,42 @@ type SignUpResponse struct {
 	Token string              `json:"token"`
 }
 
-// SignUp - POST /api/v1/auth/signup
+// UpdateMeRequest represents fields allowed for profile update
+type UpdateMeRequest struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+	Photo string `json:"photo,omitempty"`
+}
+
+// UpdatePasswordRequest represents the password change payload
+type UpdatePasswordRequest struct {
+	PasswordCurrent string `json:"passwordCurrent" binding:"required"`
+	Password        string `json:"password" binding:"required,min=8"`
+	PasswordConfirm string `json:"passwordConfirm" binding:"required"`
+}
+
+// ForgotPasswordRequest represents the email payload for reset
+type ForgotPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+// ResetPasswordRequest represents the payload to reset password
+type ResetPasswordRequest struct {
+	Password        string `json:"password" binding:"required,min=8"`
+	PasswordConfirm string `json:"passwordConfirm" binding:"required"`
+}
+
+// SignUp godoc
+// @Summary      Register a new user
+// @Description  Creates a new user account with default 'user' role and returns an authentication JWT token
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request  body      SignUpRequest  true  "User Registration Details"
+// @Success      201      {object}  map[string]interface{}
+// @Failure      400      {object}  map[string]string  "Validation error or duplicate email"
+// @Failure      500      {object}  map[string]string  "Internal server error"
+// @Router       /auth/signup [post]
 func (c *AuthController) SignUp(ctx *gin.Context) {
 	var req SignUpRequest
 
@@ -129,7 +164,18 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// Login - POST /api/v1/auth/login
+// Login godoc
+// @Summary      Log in user
+// @Description  Authenticates a user with email and password, returning a JWT token
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        credentials  body      LoginRequest  true  "Email and Password"
+// @Success      200          {object}  map[string]interface{}
+// @Failure      400          {object}  map[string]string  "Invalid request body"
+// @Failure      401          {object}  map[string]string  "Invalid email or password"
+// @Failure      500          {object}  map[string]string  "Internal server error"
+// @Router       /auth/login [post]
 func (c *AuthController) Login(ctx *gin.Context) {
 	var req LoginRequest
 
@@ -174,7 +220,16 @@ func (c *AuthController) Login(ctx *gin.Context) {
 	})
 }
 
-// GetMe - GET /api/v1/auth/me
+// GetMe godoc
+// @Summary      Get current user profile
+// @Description  Retrieves details of the currently authenticated user
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Failure      401  {object}  map[string]string  "Unauthorized / Not authenticated"
+// @Failure      404  {object}  map[string]string  "User not found"
+// @Router       /auth/me [get]
 func (c *AuthController) GetMe(ctx *gin.Context) {
 	userID, exists := ctx.Get("userID")
 	if !exists {
@@ -213,7 +268,19 @@ func (c *AuthController) GetMe(ctx *gin.Context) {
 	})
 }
 
-// UpdateMe - PATCH /api/v1/auth/updateme
+// UpdateMe godoc
+// @Summary      Update user profile
+// @Description  Updates authenticated user details (name, email, photo)
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        request  body      UpdateMeRequest  true  "Fields to update"
+// @Success      200      {object}  map[string]interface{}
+// @Failure      400      {object}  map[string]string  "Invalid input or email already in use"
+// @Failure      401      {object}  map[string]string  "Not authenticated"
+// @Failure      404      {object}  map[string]string  "User not found"
+// @Router       /auth/updateme [patch]
 func (c *AuthController) UpdateMe(ctx *gin.Context) {
 	userID, exists := ctx.Get("userID")
 	if !exists {
@@ -302,7 +369,18 @@ func (c *AuthController) UpdateMe(ctx *gin.Context) {
 	})
 }
 
-// UpdatePassword - PATCH /api/v1/auth/updatepassword
+// UpdatePassword godoc
+// @Summary      Update user password
+// @Description  Allows logged-in users to update their current password and issues a new JWT token
+// @Tags         auth
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        request  body      UpdatePasswordRequest  true  "Password Update Payload"
+// @Success      200      {object}  map[string]interface{}
+// @Failure      400      {object}  map[string]string  "Validation error or mismatching passwords"
+// @Failure      401      {object}  map[string]string  "Current password is wrong or user unauthenticated"
+// @Router       /auth/updatepassword [patch]
 func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 	userID, exists := ctx.Get("userID")
 	if !exists {
@@ -395,7 +473,17 @@ func (c *AuthController) UpdatePassword(ctx *gin.Context) {
 	})
 }
 
-// ForgotPassword - POST /api/v1/auth/forgotpassword
+// ForgotPassword godoc
+// @Summary      Request password reset link
+// @Description  Sends a password reset token via email if the account exists
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request  body      ForgotPasswordRequest  true  "Registered user email"
+// @Success      200      {object}  map[string]string      "Reset link sent message"
+// @Failure      400      {object}  map[string]string      "Invalid email payload"
+// @Failure      500      {object}  map[string]string      "Email sending error"
+// @Router       /auth/forgotpassword [post]
 func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 	var req struct {
 		Email string `json:"email" binding:"required,email"`
@@ -452,7 +540,18 @@ func (c *AuthController) ForgotPassword(ctx *gin.Context) {
 	})
 }
 
-// ResetPassword - PATCH /api/v1/auth/resetpassword/:token
+// ResetPassword godoc
+// @Summary      Reset password with token
+// @Description  Resets password using the token sent via email and returns a new JWT token
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        token    path      string                true  "Password reset token"
+// @Param        request  body      ResetPasswordRequest  true  "New password details"
+// @Success      200      {object}  map[string]interface{}
+// @Failure      400      {object}  map[string]string  "Invalid/expired token or password mismatch"
+// @Failure      500      {object}  map[string]string  "Internal server error"
+// @Router       /auth/resetpassword/{token} [patch]
 func (c *AuthController) ResetPassword(ctx *gin.Context) {
 	resetToken := ctx.Param("token")
 	if resetToken == "" {
@@ -535,7 +634,15 @@ func (c *AuthController) ResetPassword(ctx *gin.Context) {
 	})
 }
 
-// Logout - POST /api/v1/auth/logout
+// Logout godoc
+// @Summary      Log out current user
+// @Description  Invalidates the current JWT access token by adding it to the Redis blacklist
+// @Tags         auth
+// @Security     Bearer
+// @Produce      json
+// @Success      200  {object}  map[string]string  "Logged out successfully"
+// @Failure      401  {object}  map[string]string  "Not authenticated or invalid token format"
+// @Router       /auth/logout [post]
 func (c *AuthController) Logout(ctx *gin.Context) {
 	authHeader := ctx.GetHeader("Authorization")
 	if authHeader == "" {

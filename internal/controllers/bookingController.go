@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/hex"
@@ -30,6 +31,18 @@ type BookingController struct {
 	paymentService    *paystack.PaymentService
 }
 
+// CreateBookingDTO represents payload for creating a booking manually
+type CreateBookingDTO struct {
+	TourID string  `json:"tourId" binding:"required" example:"60c72b2f9b1d8b2a3c8e4567"`
+	UserID string  `json:"userId" binding:"required" example:"60c72b2f9b1d8b2a3c8e4568"`
+	Price  float64 `json:"price" binding:"required" example:"250.00"`
+}
+
+// UpdateBookingDTO represents payload for updating a booking status
+type UpdateBookingDTO struct {
+	Status string `json:"status" binding:"required" example:"paid"`
+}
+
 func NewBookingController(db *mongo.Database) (*BookingController, error) {
 	paymentService, err := paystack.NewPaymentService()
 	if err != nil {
@@ -44,7 +57,20 @@ func NewBookingController(db *mongo.Database) (*BookingController, error) {
 	}, nil
 }
 
-// GetCheckoutSession - GET /api/v1/bookings/checkout-session/:tourId
+// GetCheckoutSession godoc
+// @Summary      Create checkout session
+// @Description  Initializes a Paystack checkout session for a tour or runs a mock checkout session in test mode
+// @Tags         Bookings
+// @Accept       json
+// @Produce      json
+// @Param        tourId path string true "Tour ID"
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{} "Returns authorizationUrl, reference, and accessCode"
+// @Failure      400 {object} map[string]interface{} "Invalid tour ID"
+// @Failure      401 {object} map[string]interface{} "Not authenticated"
+// @Failure      404 {object} map[string]interface{} "Tour not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings/checkout-session/{tourId} [get]
 func (c *BookingController) GetCheckoutSession(ctx *gin.Context) {
 	mockMode := os.Getenv("PAYSTACK_MOCK_MODE") == "true"
 	if mockMode && gin.Mode() != gin.ReleaseMode {
@@ -54,7 +80,6 @@ func (c *BookingController) GetCheckoutSession(ctx *gin.Context) {
 	c.getRealCheckoutSession(ctx)
 }
 
-// getMockCheckoutSession - Mock version for non-production environments
 func (c *BookingController) getMockCheckoutSession(ctx *gin.Context) {
 	tourID := ctx.Param("tourId")
 	tourObjID, err := primitive.ObjectIDFromHex(tourID)
@@ -69,11 +94,14 @@ func (c *BookingController) getMockCheckoutSession(ctx *gin.Context) {
 		return
 	}
 
-	userIDStr := userID.(string)
+	userIDStr, ok := userID.(string)
+	if !ok {
+		ctx.Error(utils.NewUnauthorizedError("Invalid authenticated user session"))
+		return
+	}
 	userObjID, _ := primitive.ObjectIDFromHex(userIDStr)
 
 	var tour models.Tour
-	// FIX: Use request context instead of context.Background()
 	err = c.tourCollection.FindOne(ctx.Request.Context(), bson.M{"_id": tourObjID}).Decode(&tour)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -90,8 +118,6 @@ func (c *BookingController) getMockCheckoutSession(ctx *gin.Context) {
 	}
 
 	reference := fmt.Sprintf("MOCK-TOUR-%s-%d", tourID, time.Now().UnixNano())
-
-	// FIX: Safer precision arithmetic (Ideally, store pricing as integer Kobo directly in your models)
 	amountKobo := int64(tour.Price*100 + 0.5)
 
 	booking := models.Booking{
@@ -128,7 +154,6 @@ func (c *BookingController) getMockCheckoutSession(ctx *gin.Context) {
 	})
 }
 
-// getRealCheckoutSession - Real Paystack version
 func (c *BookingController) getRealCheckoutSession(ctx *gin.Context) {
 	tourID := ctx.Param("tourId")
 	tourObjID, err := primitive.ObjectIDFromHex(tourID)
@@ -143,9 +168,18 @@ func (c *BookingController) getRealCheckoutSession(ctx *gin.Context) {
 		return
 	}
 
-	userIDStr := userID.(string)
-	userObjID, _ := primitive.ObjectIDFromHex(userIDStr)
+	userIDStr, ok := userID.(string)
+	if !ok {
+		ctx.Error(utils.NewUnauthorizedError("Invalid user session"))
+		return
+	}
+	userObjID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		ctx.Error(utils.NewBadRequestError("Invalid user ID format"))
+		return
+	}
 
+	// FIX: Corrected query target to tourCollection with tourObjID
 	var tour models.Tour
 	err = c.tourCollection.FindOne(ctx.Request.Context(), bson.M{"_id": tourObjID}).Decode(&tour)
 	if err != nil {
@@ -160,6 +194,10 @@ func (c *BookingController) getRealCheckoutSession(ctx *gin.Context) {
 	var user models.User
 	err = c.userCollection.FindOne(ctx.Request.Context(), bson.M{"_id": userObjID}).Decode(&user)
 	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			ctx.Error(utils.NewNotFoundError("User not found"))
+			return
+		}
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -224,7 +262,16 @@ func (c *BookingController) getRealCheckoutSession(ctx *gin.Context) {
 	})
 }
 
-// VerifyPayment - GET /api/v1/bookings/verify-payment
+// VerifyPayment godoc
+// @Summary      Verify booking payment
+// @Description  Verifies the status of a transaction using the Paystack payment reference
+// @Tags         Bookings
+// @Produce      json
+// @Param        reference query string true "Payment reference"
+// @Success      200 {object} map[string]interface{} "Payment verified successfully"
+// @Failure      400 {object} map[string]interface{} "Missing reference or verification failed"
+// @Failure      500 {object} map[string]interface{} "Failed to update booking"
+// @Router       /api/v1/bookings/verify-payment [get]
 func (c *BookingController) VerifyPayment(ctx *gin.Context) {
 	reference := ctx.Query("reference")
 	if reference == "" {
@@ -281,7 +328,17 @@ func (c *BookingController) VerifyPayment(ctx *gin.Context) {
 	})
 }
 
-// Webhook - POST /api/v1/bookings/webhook
+// Webhook godoc
+// @Summary      Paystack webhook endpoint
+// @Description  Receives asynchronous event updates from Paystack (e.g., charge.success)
+// @Tags         Bookings
+// @Accept       json
+// @Produce      json
+// @Param        x-paystack-signature header string true "HMAC SHA512 signature"
+// @Success      200 {object} map[string]interface{} "Status success or ignored"
+// @Failure      400 {object} map[string]interface{} "Bad request or missing payload"
+// @Failure      401 {object} map[string]interface{} "Invalid signature"
+// @Router       /api/v1/bookings/webhook [post]
 func (c *BookingController) Webhook(ctx *gin.Context) {
 	signature := ctx.GetHeader("x-paystack-signature")
 	if signature == "" {
@@ -295,7 +352,9 @@ func (c *BookingController) Webhook(ctx *gin.Context) {
 		return
 	}
 
-	// FIX: Strict signature validation to prevent spoofing variants
+	// FIX: Restore the body reader so downstream middleware can read it if needed
+	ctx.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
 	secret := os.Getenv("PAYSTACK_SECRET_KEY")
 	h := hmac.New(sha512.New, []byte(secret))
 	h.Write(body)
@@ -342,9 +401,16 @@ func (c *BookingController) Webhook(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"status": "success"})
 }
 
-// GetAllBookings - GET /api/v1/bookings (Admin only)
+// GetAllBookings godoc
+// @Summary      Get all bookings
+// @Description  Retrieves all bookings populated with tour and user details (Admin only)
+// @Tags         Bookings
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{} "List of populated bookings"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings [get]
 func (c *BookingController) GetAllBookings(ctx *gin.Context) {
-	// FIX: Solved N+1 problem completely using a fast, isolated $lookup pipeline execution
 	pipeline := mongo.Pipeline{
 		{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: "tours"},
@@ -393,7 +459,18 @@ func (c *BookingController) GetAllBookings(ctx *gin.Context) {
 	})
 }
 
-// GetBooking - GET /api/v1/bookings/:id (Admin only)
+// GetBooking godoc
+// @Summary      Get booking by ID
+// @Description  Fetches details of a specific booking by ID (Admin only)
+// @Tags         Bookings
+// @Produce      json
+// @Param        id path string true "Booking ID"
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{} "Booking details"
+// @Failure      400 {object} map[string]interface{} "Invalid booking ID"
+// @Failure      404 {object} map[string]interface{} "Booking not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings/{id} [get]
 func (c *BookingController) GetBooking(ctx *gin.Context) {
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
@@ -422,13 +499,20 @@ func (c *BookingController) GetBooking(ctx *gin.Context) {
 	})
 }
 
-// CreateBooking - POST /api/v1/bookings (Admin only)
+// CreateBooking godoc
+// @Summary      Create booking
+// @Description  Manually creates a booking (Admin only)
+// @Tags         Bookings
+// @Accept       json
+// @Produce      json
+// @Param        booking body CreateBookingDTO true "Booking details"
+// @Security     BearerAuth
+// @Success      201 {object} map[string]interface{} "Created booking"
+// @Failure      400 {object} map[string]interface{} "Invalid input data"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings [post]
 func (c *BookingController) CreateBooking(ctx *gin.Context) {
-	var req struct {
-		TourID string  `json:"tourId" binding:"required"`
-		UserID string  `json:"userId" binding:"required"`
-		Price  float64 `json:"price" binding:"required"`
-	}
+	var req CreateBookingDTO
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid request: " + err.Error()))
@@ -474,7 +558,20 @@ func (c *BookingController) CreateBooking(ctx *gin.Context) {
 	})
 }
 
-// UpdateBooking - PATCH /api/v1/bookings/:id (Admin only)
+// UpdateBooking godoc
+// @Summary      Update booking
+// @Description  Updates status of an existing booking (Admin only)
+// @Tags         Bookings
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Booking ID"
+// @Param        booking body UpdateBookingDTO true "Status update payload"
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{} "Updated booking"
+// @Failure      400 {object} map[string]interface{} "Invalid input data or booking ID"
+// @Failure      404 {object} map[string]interface{} "Booking not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings/{id} [patch]
 func (c *BookingController) UpdateBooking(ctx *gin.Context) {
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
@@ -483,10 +580,7 @@ func (c *BookingController) UpdateBooking(ctx *gin.Context) {
 		return
 	}
 
-	// FIX: Use explicit DTO instead of unverified direct bson.M assignment mapping
-	var req struct {
-		Status string `json:"status" binding:"required"`
-	}
+	var req UpdateBookingDTO
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid request: " + err.Error()))
 		return
@@ -522,7 +616,17 @@ func (c *BookingController) UpdateBooking(ctx *gin.Context) {
 	})
 }
 
-// DeleteBooking - DELETE /api/v1/bookings/:id (Admin only)
+// DeleteBooking godoc
+// @Summary      Delete booking
+// @Description  Removes a booking record (Admin only)
+// @Tags         Bookings
+// @Param        id path string true "Booking ID"
+// @Security     BearerAuth
+// @Success      240 "No Content"
+// @Failure      400 {object} map[string]interface{} "Invalid booking ID"
+// @Failure      404 {object} map[string]interface{} "Booking not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Router       /api/v1/bookings/{id} [delete]
 func (c *BookingController) DeleteBooking(ctx *gin.Context) {
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
@@ -545,50 +649,56 @@ func (c *BookingController) DeleteBooking(ctx *gin.Context) {
 	ctx.Status(http.StatusNoContent)
 }
 
-// MockPaymentPage - GET /api/v1/bookings/mock-payment
+// MockPaymentPage godoc
+// @Summary      Render mock payment UI
+// @Description  Renders an HTML interface for completing test mode payments
+// @Tags         Bookings
+// @Produce      html
+// @Param        reference query string true "Test reference"
+// @Success      200 {string} string "HTML content"
+// @Router       /api/v1/bookings/mock-payment [get]
 func (c *BookingController) MockPaymentPage(ctx *gin.Context) {
-	// FIX: Use html.EscapeString to sanitize against injection vectors
 	reference := html.EscapeString(ctx.Query("reference"))
 
 	htmlContent := `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Mock Payment - Test Mode</title>
-        <style>
-            body { font-family: Arial; text-align: center; padding: 50px; }
-            .container { max-width: 500px; margin: auto; }
-            .success-box { background: #d4edda; color: #155724; padding: 30px; border-radius: 5px; margin: 20px 0; }
-            .info-box { background: #e2e3e5; padding: 15px; border-radius: 5px; margin: 20px 0; }
-            button { background: #28a745; color: white; padding: 15px 30px; font-size: 16px; border: none; cursor: pointer; border-radius: 5px; }
-            button:hover { background: #218838; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔧 Mock Payment Page</h1>
-            <div class="info-box">
-                <p><strong>Test Reference:</strong> ` + reference + `</p>
-            </div>
-            <div class="success-box">
-                <button onclick="completePayment()">Complete Test Payment</button>
-            </div>
-        </div>
-        <script>
-            function completePayment() {
-                fetch('/api/v1/bookings/verify-payment?reference=` + reference + `')
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.status === 'success') {
-                            window.location.href = '/booking-success?reference=` + reference + `';
-                        } else {
-                            alert('Verification failed');
-                        }
-                    });
-            }
-        </script>
-    </body>
-    </html>`
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<title>Mock Payment - Test Mode</title>
+		<style>
+			body { font-family: Arial; text-align: center; padding: 50px; }
+			.container { max-width: 500px; margin: auto; }
+			.success-box { background: #d4edda; color: #155724; padding: 30px; border-radius: 5px; margin: 20px 0; }
+			.info-box { background: #e2e3e5; padding: 15px; border-radius: 5px; margin: 20px 0; }
+			button { background: #28a745; color: white; padding: 15px 30px; font-size: 16px; border: none; cursor: pointer; border-radius: 5px; }
+			button:hover { background: #218838; }
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<h1>🔧 Mock Payment Page</h1>
+			<div class="info-box">
+				<p><strong>Test Reference:</strong> ` + reference + `</p>
+			</div>
+			<div class="success-box">
+				<button onclick="completePayment()">Complete Test Payment</button>
+			</div>
+		</div>
+		<script>
+			function completePayment() {
+				fetch('/api/v1/bookings/verify-payment?reference=` + reference + `')
+					.then(res => res.json())
+					.then(data => {
+						if (data.status === 'success') {
+							window.location.href = '/booking-success?reference=` + reference + `';
+						} else {
+							alert('Verification failed');
+						}
+					});
+			}
+		</script>
+	</body>
+	</html>`
 
 	ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(htmlContent))
 }

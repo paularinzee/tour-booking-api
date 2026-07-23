@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,9 +23,37 @@ func NewUserController(db *mongo.Database) *UserController {
 	}
 }
 
-// DeleteMe - DELETE /api/v1/auth/deleteme
-// Soft delete the current user (set active to false)
+type CreateUserRequest struct {
+	Name            string `json:"name" binding:"required" example:"John Doe"`
+	Email           string `json:"email" binding:"required,email" example:"john@example.com"`
+	Password        string `json:"password" binding:"required,min=8" example:"password123"`
+	PasswordConfirm string `json:"passwordConfirm" binding:"required" example:"password123"`
+	Role            string `json:"role" example:"user"`
+	Photo           string `json:"photo" example:"default.jpg"`
+}
+
+type UpdateUserRequest struct {
+	Name   string `json:"name,omitempty" example:"John Doe"`
+	Email  string `json:"email,omitempty" example:"john@example.com"`
+	Photo  string `json:"photo,omitempty" example:"avatar.jpg"`
+	Role   string `json:"role,omitempty" example:"guide"`
+	Active bool   `json:"active,omitempty" example:"true"`
+}
+
+// DeleteMe Godoc
+// @Summary      Deactivate current account
+// @Description  Soft delete the currently authenticated user account
+// @Tags         Users
+// @Produce      json
+// @Security     Bearer
+// @Success      204  "No Content"
+// @Failure      401  {object}  utils.AppError
+// @Failure      404  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /auth/deleteme [delete]
 func (c *UserController) DeleteMe(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	userID, exists := ctx.Get("userID")
 	if !exists {
 		ctx.Error(utils.NewUnauthorizedError("Not authenticated"))
@@ -45,7 +72,6 @@ func (c *UserController) DeleteMe(ctx *gin.Context) {
 		return
 	}
 
-	// Soft delete - set active to false
 	update := bson.M{
 		"$set": bson.M{
 			"active":    false,
@@ -53,7 +79,7 @@ func (c *UserController) DeleteMe(ctx *gin.Context) {
 		},
 	}
 
-	result, err := c.userCollection.UpdateOne(context.Background(), bson.M{"_id": objID}, update)
+	result, err := c.userCollection.UpdateOne(reqCtx, bson.M{"_id": objID}, update)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
@@ -67,18 +93,28 @@ func (c *UserController) DeleteMe(ctx *gin.Context) {
 	ctx.JSON(204, gin.H{"status": "success", "data": nil})
 }
 
-// GetAllUsers - GET /api/v1/users
-// Get all users (admin only)
+// GetAllUsers Godoc
+// @Summary      Get all active users
+// @Description  Retrieve all active users (Admin only)
+// @Tags         Users
+// @Produce      json
+// @Security     Bearer
+// @Success      200  {object}  map[string]interface{}
+// @Failure      401  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /users [get]
 func (c *UserController) GetAllUsers(ctx *gin.Context) {
-	cursor, err := c.userCollection.Find(context.Background(), bson.M{"active": true})
+	reqCtx := ctx.Request.Context()
+
+	cursor, err := c.userCollection.Find(reqCtx, bson.M{"active": true})
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(reqCtx)
 
 	var users []models.User
-	if err = cursor.All(context.Background(), &users); err != nil {
+	if err = cursor.All(reqCtx, &users); err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
 	}
@@ -97,17 +133,23 @@ func (c *UserController) GetAllUsers(ctx *gin.Context) {
 	})
 }
 
-// CreateUser - POST /api/v1/users
-// Create a new user (admin only)
+// CreateUser Godoc
+// @Summary      Create a user
+// @Description  Manually create a new user account (Admin only)
+// @Tags         Users
+// @Accept       json
+// @Produce      json
+// @Security     Bearer
+// @Param        user  body      CreateUserRequest  true  "User details"
+// @Success      201   {object}  map[string]interface{}
+// @Failure      400   {object}  utils.AppError
+// @Failure      401   {object}  utils.AppError
+// @Failure      500   {object}  utils.AppError
+// @Router       /users [post]
 func (c *UserController) CreateUser(ctx *gin.Context) {
-	var req struct {
-		Name            string `json:"name" binding:"required"`
-		Email           string `json:"email" binding:"required,email"`
-		Password        string `json:"password" binding:"required,min=8"`
-		PasswordConfirm string `json:"passwordConfirm" binding:"required"`
-		Role            string `json:"role"`
-		Photo           string `json:"photo"`
-	}
+	reqCtx := ctx.Request.Context()
+
+	var req CreateUserRequest
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(utils.NewBadRequestError("Invalid request: " + err.Error()))
@@ -119,19 +161,17 @@ func (c *UserController) CreateUser(ctx *gin.Context) {
 		return
 	}
 
-	// Check if user exists
 	email := models.NormalizeEmail(req.Email)
 	var existingUser models.User
-	err := c.userCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(&existingUser)
+	err := c.userCollection.FindOne(reqCtx, bson.M{"email": email}).Decode(&existingUser)
 	if err == nil {
 		ctx.Error(utils.NewBadRequestError("User with this email already exists"))
 		return
 	}
 
-	// Create user
 	user := models.User{
 		ID:              primitive.NewObjectID(),
-		Name:            req.Name,
+		Name:            models.SanitizeName(req.Name),
 		Email:           email,
 		Password:        req.Password,
 		PasswordConfirm: req.PasswordConfirm,
@@ -142,17 +182,21 @@ func (c *UserController) CreateUser(ctx *gin.Context) {
 		UpdatedAt:       time.Now(),
 	}
 
-	// Set role if provided
 	if req.Role != "" {
+		isValidRole := false
 		for _, role := range models.ValidRoles() {
 			if models.UserRole(req.Role) == role {
 				user.Role = role
+				isValidRole = true
 				break
 			}
 		}
+		if !isValidRole {
+			ctx.Error(utils.NewBadRequestError("Invalid user role provided"))
+			return
+		}
 	}
 
-	// Set photo if provided
 	if req.Photo != "" {
 		user.Photo = req.Photo
 	}
@@ -162,7 +206,7 @@ func (c *UserController) CreateUser(ctx *gin.Context) {
 		return
 	}
 
-	_, err = c.userCollection.InsertOne(context.Background(), user)
+	_, err = c.userCollection.InsertOne(reqCtx, user)
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return
@@ -176,9 +220,22 @@ func (c *UserController) CreateUser(ctx *gin.Context) {
 	})
 }
 
-// GetUser - GET /api/v1/users/:id
-// Get a user by ID (admin only)
+// GetUser Godoc
+// @Summary      Get user by ID
+// @Description  Get single user details by ID (Admin only)
+// @Tags         Users
+// @Produce      json
+// @Security     Bearer
+// @Param        id   path      string  true  "User ID"
+// @Success      200  {object}  map[string]interface{}
+// @Failure      400  {object}  utils.AppError
+// @Failure      401  {object}  utils.AppError
+// @Failure      404  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /users/{id} [get]
 func (c *UserController) GetUser(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -187,7 +244,7 @@ func (c *UserController) GetUser(ctx *gin.Context) {
 	}
 
 	var user models.User
-	err = c.userCollection.FindOne(context.Background(), bson.M{"_id": objID, "active": true}).Decode(&user)
+	err = c.userCollection.FindOne(reqCtx, bson.M{"_id": objID, "active": true}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			ctx.Error(utils.NewNotFoundError("User not found"))
@@ -205,9 +262,24 @@ func (c *UserController) GetUser(ctx *gin.Context) {
 	})
 }
 
-// UpdateUser - PATCH /api/v1/users/:id
-// Update a user (admin only)
+// UpdateUser Godoc
+// @Summary      Update user
+// @Description  Update single user record by ID (Admin only)
+// @Tags         Users
+// @Accept       json
+// @Produce      json
+// @Security     Bearer
+// @Param        id    path      string             true  "User ID"
+// @Param        user  body      UpdateUserRequest  true  "Partial user attributes"
+// @Success      200   {object}  map[string]interface{}
+// @Failure      400   {object}  utils.AppError
+// @Failure      401   {object}  utils.AppError
+// @Failure      404   {object}  utils.AppError
+// @Failure      500   {object}  utils.AppError
+// @Router       /users/{id} [patch]
 func (c *UserController) UpdateUser(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -221,7 +293,6 @@ func (c *UserController) UpdateUser(ctx *gin.Context) {
 		return
 	}
 
-	// Allowed fields for admin update
 	allowedFields := map[string]bool{
 		"name":   true,
 		"email":  true,
@@ -234,10 +305,32 @@ func (c *UserController) UpdateUser(ctx *gin.Context) {
 	for key, value := range updateData {
 		if allowedFields[key] {
 			if key == "email" {
-				value = models.NormalizeEmail(value.(string))
+				if emailStr, ok := value.(string); ok {
+					value = models.NormalizeEmail(emailStr)
+				}
 			}
 			if key == "name" {
-				value = models.SanitizeName(value.(string))
+				if nameStr, ok := value.(string); ok {
+					value = models.SanitizeName(nameStr)
+				}
+			}
+			if key == "role" {
+				roleStr, ok := value.(string)
+				if !ok {
+					ctx.Error(utils.NewBadRequestError("Invalid role value format"))
+					return
+				}
+				isValidRole := false
+				for _, role := range models.ValidRoles() {
+					if models.UserRole(roleStr) == role {
+						isValidRole = true
+						break
+					}
+				}
+				if !isValidRole {
+					ctx.Error(utils.NewBadRequestError("Invalid user role provided"))
+					return
+				}
 			}
 			filteredUpdate[key] = value
 		}
@@ -254,7 +347,7 @@ func (c *UserController) UpdateUser(ctx *gin.Context) {
 
 	var updatedUser models.User
 	err = c.userCollection.FindOneAndUpdate(
-		context.Background(),
+		reqCtx,
 		bson.M{"_id": objID},
 		update,
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -277,9 +370,22 @@ func (c *UserController) UpdateUser(ctx *gin.Context) {
 	})
 }
 
-// DeleteUser - DELETE /api/v1/users/:id
-// Hard delete a user (admin only)
+// DeleteUser Godoc
+// @Summary      Delete user
+// @Description  Permanently hard delete a user account from database (Admin only)
+// @Tags         Users
+// @Produce      json
+// @Security     Bearer
+// @Param        id   path      string  true  "User ID"
+// @Success      204  "No Content"
+// @Failure      400  {object}  utils.AppError
+// @Failure      401  {object}  utils.AppError
+// @Failure      404  {object}  utils.AppError
+// @Failure      500  {object}  utils.AppError
+// @Router       /users/{id} [delete]
 func (c *UserController) DeleteUser(ctx *gin.Context) {
+	reqCtx := ctx.Request.Context()
+
 	id := ctx.Param("id")
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -287,7 +393,7 @@ func (c *UserController) DeleteUser(ctx *gin.Context) {
 		return
 	}
 
-	result, err := c.userCollection.DeleteOne(context.Background(), bson.M{"_id": objID})
+	result, err := c.userCollection.DeleteOne(reqCtx, bson.M{"_id": objID})
 	if err != nil {
 		ctx.Error(utils.NewInternalServerError(err))
 		return

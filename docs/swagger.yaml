@@ -1,0 +1,1515 @@
+basePath: /api/v1
+definitions:
+  controllers.CreateBookingDTO:
+    properties:
+      price:
+        example: 250
+        type: number
+      tourId:
+        example: 60c72b2f9b1d8b2a3c8e4567
+        type: string
+      userId:
+        example: 60c72b2f9b1d8b2a3c8e4568
+        type: string
+    required:
+    - price
+    - tourId
+    - userId
+    type: object
+  controllers.CreateUserRequest:
+    properties:
+      email:
+        example: john@example.com
+        type: string
+      name:
+        example: John Doe
+        type: string
+      password:
+        example: password123
+        minLength: 8
+        type: string
+      passwordConfirm:
+        example: password123
+        type: string
+      photo:
+        example: default.jpg
+        type: string
+      role:
+        example: user
+        type: string
+    required:
+    - email
+    - name
+    - password
+    - passwordConfirm
+    type: object
+  controllers.ForgotPasswordRequest:
+    properties:
+      email:
+        type: string
+    required:
+    - email
+    type: object
+  controllers.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    required:
+    - email
+    - password
+    type: object
+  controllers.ResetPasswordRequest:
+    properties:
+      password:
+        minLength: 8
+        type: string
+      passwordConfirm:
+        type: string
+    required:
+    - password
+    - passwordConfirm
+    type: object
+  controllers.SignUpRequest:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      password:
+        minLength: 8
+        type: string
+      passwordConfirm:
+        type: string
+      photo:
+        type: string
+    required:
+    - email
+    - name
+    - password
+    - passwordConfirm
+    type: object
+  controllers.UpdateBookingDTO:
+    properties:
+      status:
+        example: paid
+        type: string
+    required:
+    - status
+    type: object
+  controllers.UpdateMeRequest:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      photo:
+        type: string
+    type: object
+  controllers.UpdatePasswordRequest:
+    properties:
+      password:
+        minLength: 8
+        type: string
+      passwordConfirm:
+        type: string
+      passwordCurrent:
+        type: string
+    required:
+    - password
+    - passwordConfirm
+    - passwordCurrent
+    type: object
+  controllers.UpdateUserRequest:
+    properties:
+      active:
+        example: true
+        type: boolean
+      email:
+        example: john@example.com
+        type: string
+      name:
+        example: John Doe
+        type: string
+      photo:
+        example: avatar.jpg
+        type: string
+      role:
+        example: guide
+        type: string
+    type: object
+  models.Location:
+    properties:
+      address:
+        type: string
+      coordinates:
+        items:
+          type: number
+        type: array
+      day:
+        type: integer
+      description:
+        type: string
+      type:
+        type: string
+    type: object
+  models.Review:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      rating:
+        maximum: 5
+        minimum: 1
+        type: integer
+      review:
+        type: string
+      tour:
+        allOf:
+        - $ref: '#/definitions/models.Tour'
+        description: Populated fields (not stored in DB)
+      tourId:
+        type: string
+      user:
+        $ref: '#/definitions/models.User'
+      userId:
+        type: string
+    required:
+    - review
+    - tourId
+    type: object
+  models.StartLocation:
+    properties:
+      address:
+        type: string
+      coordinates:
+        items:
+          type: number
+        type: array
+      description:
+        type: string
+      type:
+        type: string
+    type: object
+  models.Tour:
+    properties:
+      createdAt:
+        type: string
+      description:
+        type: string
+      difficulty:
+        type: string
+      duration:
+        type: integer
+      guides:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      imageCover:
+        type: string
+      images:
+        items:
+          type: string
+        type: array
+      locations:
+        items:
+          $ref: '#/definitions/models.Location'
+        type: array
+      maxGroupSize:
+        type: integer
+      name:
+        type: string
+      price:
+        type: number
+      priceDiscount:
+        type: number
+      ratingsAverage:
+        type: number
+      ratingsQuantity:
+        type: integer
+      reviews:
+        items:
+          $ref: '#/definitions/models.Review'
+        type: array
+      secretTour:
+        type: boolean
+      slug:
+        type: string
+      startDates:
+        items:
+          type: string
+        type: array
+      startLocation:
+        $ref: '#/definitions/models.StartLocation'
+      summary:
+        type: string
+    type: object
+  models.User:
+    properties:
+      active:
+        type: boolean
+      createdAt:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      photo:
+        type: string
+      role:
+        $ref: '#/definitions/models.UserRole'
+      updatedAt:
+        type: string
+    type: object
+  models.UserRole:
+    enum:
+    - user
+    - guide
+    - lead-guide
+    - admin
+    type: string
+    x-enum-varnames:
+    - RoleUser
+    - RoleGuide
+    - RoleLeadGuide
+    - RoleAdmin
+  utils.AppError:
+    properties:
+      err: {}
+      errorCode:
+        type: string
+      message:
+        type: string
+      statusCode:
+        type: integer
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Tour booking application API
+  termsOfService: http://swagger.io/terms/
+  title: Tour Booking API
+  version: "1.0"
+paths:
+  /admin/tours/cleanup/images:
+    delete:
+      description: Deletes unreferenced files from disk (Admin only)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Clean up orphaned tour images
+      tags:
+      - Tours
+  /api/v1/bookings:
+    get:
+      description: Retrieves all bookings populated with tour and user details (Admin
+        only)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of populated bookings
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get all bookings
+      tags:
+      - Bookings
+    post:
+      consumes:
+      - application/json
+      description: Manually creates a booking (Admin only)
+      parameters:
+      - description: Booking details
+        in: body
+        name: booking
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CreateBookingDTO'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created booking
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid input data
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create booking
+      tags:
+      - Bookings
+  /api/v1/bookings/{id}:
+    delete:
+      description: Removes a booking record (Admin only)
+      parameters:
+      - description: Booking ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "240":
+          description: No Content
+        "400":
+          description: Invalid booking ID
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Booking not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete booking
+      tags:
+      - Bookings
+    get:
+      description: Fetches details of a specific booking by ID (Admin only)
+      parameters:
+      - description: Booking ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Booking details
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid booking ID
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Booking not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get booking by ID
+      tags:
+      - Bookings
+    patch:
+      consumes:
+      - application/json
+      description: Updates status of an existing booking (Admin only)
+      parameters:
+      - description: Booking ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status update payload
+        in: body
+        name: booking
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.UpdateBookingDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated booking
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid input data or booking ID
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Booking not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update booking
+      tags:
+      - Bookings
+  /api/v1/bookings/checkout-session/{tourId}:
+    get:
+      consumes:
+      - application/json
+      description: Initializes a Paystack checkout session for a tour or runs a mock
+        checkout session in test mode
+      parameters:
+      - description: Tour ID
+        in: path
+        name: tourId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Returns authorizationUrl, reference, and accessCode
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid tour ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Not authenticated
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Tour not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create checkout session
+      tags:
+      - Bookings
+  /api/v1/bookings/mock-payment:
+    get:
+      description: Renders an HTML interface for completing test mode payments
+      parameters:
+      - description: Test reference
+        in: query
+        name: reference
+        required: true
+        type: string
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML content
+          schema:
+            type: string
+      summary: Render mock payment UI
+      tags:
+      - Bookings
+  /api/v1/bookings/verify-payment:
+    get:
+      description: Verifies the status of a transaction using the Paystack payment
+        reference
+      parameters:
+      - description: Payment reference
+        in: query
+        name: reference
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Payment verified successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Missing reference or verification failed
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Failed to update booking
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Verify booking payment
+      tags:
+      - Bookings
+  /api/v1/bookings/webhook:
+    post:
+      consumes:
+      - application/json
+      description: Receives asynchronous event updates from Paystack (e.g., charge.success)
+      parameters:
+      - description: HMAC SHA512 signature
+        in: header
+        name: x-paystack-signature
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Status success or ignored
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad request or missing payload
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Invalid signature
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Paystack webhook endpoint
+      tags:
+      - Bookings
+  /auth/deleteme:
+    delete:
+      description: Soft delete the currently authenticated user account
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Deactivate current account
+      tags:
+      - Users
+  /auth/forgotpassword:
+    post:
+      consumes:
+      - application/json
+      description: Sends a password reset token via email if the account exists
+      parameters:
+      - description: Registered user email
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.ForgotPasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Reset link sent message
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid email payload
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Email sending error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Request password reset link
+      tags:
+      - auth
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates a user with email and password, returning a JWT token
+      parameters:
+      - description: Email and Password
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Invalid email or password
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Log in user
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      description: Invalidates the current JWT access token by adding it to the Redis
+        blacklist
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Logged out successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Not authenticated or invalid token format
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - Bearer: []
+      summary: Log out current user
+      tags:
+      - auth
+  /auth/me:
+    get:
+      description: Retrieves details of the currently authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized / Not authenticated
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: User not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - Bearer: []
+      summary: Get current user profile
+      tags:
+      - auth
+  /auth/resetpassword/{token}:
+    patch:
+      consumes:
+      - application/json
+      description: Resets password using the token sent via email and returns a new
+        JWT token
+      parameters:
+      - description: Password reset token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: New password details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.ResetPasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid/expired token or password mismatch
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reset password with token
+      tags:
+      - auth
+  /auth/signup:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user account with default 'user' role and returns
+        an authentication JWT token
+      parameters:
+      - description: User Registration Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.SignUpRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Validation error or duplicate email
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
+  /auth/updateme:
+    patch:
+      consumes:
+      - application/json
+      description: Updates authenticated user details (name, email, photo)
+      parameters:
+      - description: Fields to update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.UpdateMeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid input or email already in use
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Not authenticated
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: User not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - Bearer: []
+      summary: Update user profile
+      tags:
+      - auth
+  /auth/updatepassword:
+    patch:
+      consumes:
+      - application/json
+      description: Allows logged-in users to update their current password and issues
+        a new JWT token
+      parameters:
+      - description: Password Update Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.UpdatePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Validation error or mismatching passwords
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Current password is wrong or user unauthenticated
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - Bearer: []
+      summary: Update user password
+      tags:
+      - auth
+  /distances/{latlng}/unit/{unit}:
+    get:
+      description: Calculates distance from latlng to each tour start point
+      parameters:
+      - description: Latitude and Longitude (lat,lng)
+        in: path
+        name: latlng
+        required: true
+        type: string
+      - description: 'Unit: ''mi'' or ''km'''
+        in: path
+        name: unit
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get distances from point to all tour starting locations
+      tags:
+      - Tours
+  /monthly-plan/{year}:
+    get:
+      description: Calculates monthly schedule count for tours
+      parameters:
+      - description: Year (e.g. 2026)
+        in: path
+        name: year
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get monthly tour plan for a given year
+      tags:
+      - Tours
+  /reviews:
+    get:
+      description: Get list of all reviews with pagination
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 100
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get all reviews
+      tags:
+      - Reviews
+  /reviews/{id}:
+    delete:
+      description: Delete review by ID
+      parameters:
+      - description: Review ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      summary: Delete review
+      tags:
+      - Reviews
+    get:
+      description: Get review by ID
+      parameters:
+      - description: Review ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get single review
+      tags:
+      - Reviews
+    patch:
+      description: Update review by ID (only review text and rating)
+      parameters:
+      - description: Review ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update fields
+        in: body
+        name: review
+        required: true
+        schema:
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Update review
+      tags:
+      - Reviews
+  /reviews/tour/{tourId}:
+    get:
+      description: Get all reviews for a tour
+      parameters:
+      - description: Tour ID
+        in: path
+        name: tourId
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get reviews for a specific tour
+      tags:
+      - Reviews
+  /tours:
+    get:
+      description: Get a paginated, sorted, and filtered list of tours
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 100
+        description: Number of items per page
+        in: query
+        name: limit
+        type: integer
+      - description: Sort fields (e.g. -price,ratingsAverage)
+        in: query
+        name: sort
+        type: string
+      - description: Comma separated fields to return
+        in: query
+        name: fields
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get all tours
+      tags:
+      - Tours
+  /tours/{id}:
+    delete:
+      description: Delete a tour by ID and remove associated files
+      parameters:
+      - description: Tour ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Delete a tour
+      tags:
+      - Tours
+    get:
+      description: Get a single tour by ID including associated user reviews
+      parameters:
+      - description: Tour ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get tour by ID
+      tags:
+      - Tours
+    patch:
+      consumes:
+      - application/json
+      - multipart/form-data
+      description: Update tour details by ID
+      parameters:
+      - description: Tour ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Partial Tour updates
+        in: body
+        name: tour
+        schema:
+          $ref: '#/definitions/models.Tour'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Update an existing tour
+      tags:
+      - Tours
+  /tours/stats:
+    get:
+      description: Calculates aggregated stats grouped by difficulty
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get tour aggregate statistics
+      tags:
+      - Tours
+  /tours/tours:
+    post:
+      consumes:
+      - application/json
+      - multipart/form-data
+      description: Create a tour via JSON or multipart/form-data
+      parameters:
+      - description: Tour payload (if JSON)
+        in: body
+        name: tour
+        schema:
+          $ref: '#/definitions/models.Tour'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Create a new tour
+      tags:
+      - Tours
+  /tours/tours-within/{distance}/center/{latlng}/unit/{unit}:
+    get:
+      description: Geospatial query to fetch tours near a center point
+      parameters:
+      - description: Radius distance
+        in: path
+        name: distance
+        required: true
+        type: number
+      - description: Latitude and Longitude (lat,lng)
+        in: path
+        name: latlng
+        required: true
+        type: string
+      - description: 'Unit: ''mi'' or ''km'''
+        in: path
+        name: unit
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get tours within a specified radius
+      tags:
+      - Tours
+  /users:
+    get:
+      description: Retrieve all active users (Admin only)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Get all active users
+      tags:
+      - Users
+    post:
+      consumes:
+      - application/json
+      description: Manually create a new user account (Admin only)
+      parameters:
+      - description: User details
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CreateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Create a user
+      tags:
+      - Users
+  /users/{id}:
+    delete:
+      description: Permanently hard delete a user account from database (Admin only)
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Delete user
+      tags:
+      - Users
+    get:
+      description: Get single user details by ID (Admin only)
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Get user by ID
+      tags:
+      - Users
+    patch:
+      consumes:
+      - application/json
+      description: Update single user record by ID (Admin only)
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Partial user attributes
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.UpdateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Update user
+      tags:
+      - Users
+securityDefinitions:
+  Bearer:
+    description: Type "Bearer " followed by a space and your token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

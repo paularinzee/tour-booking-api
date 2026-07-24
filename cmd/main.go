@@ -95,14 +95,11 @@ func main() {
 		log.Fatal("Failed to initialize booking controller:", err)
 	}
 
-	// ========== ROUTER INITIALIZATION ==========
-	// FIX: Instantiate exactly once globally to avoid compiler collision or overwritten settings
 	r := gin.Default()
 
 	// Register Swagger route
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// ========== GLOBAL MIDDLEWARES & STATICS ==========
 	// Allow all origins (development settings)
 	r.Use(cors.Default())
 
@@ -123,7 +120,7 @@ func main() {
 	// API base group
 	api := r.Group("/api/v1")
 	{
-		// ========== PUBLIC ROUTES (Strict rate limit - 50 per minute) ==========
+		// PUBLIC ROUTES (Strict rate limit - 50 per minute)
 		publicGroup := api.Group("/")
 		publicGroup.Use(middleware.PublicLimiter)
 		{
@@ -137,11 +134,11 @@ func main() {
 			publicGroup.GET("/tours/top-5-cheap", tourController.AliasTopTours, tourController.GetAllTours)
 			publicGroup.GET("/tours/tour-stats", tourController.GetTourStats)
 			publicGroup.GET("/tours/:id", tourController.GetTour)
-			publicGroup.GET("/tours-within/:distance/center/:latlng/unit/:unit", tourController.GetToursWithin)
-			publicGroup.GET("/distances/:latlng/unit/:unit", tourController.GetDistances)
+			publicGroup.GET("/tours/tours-within/:distance/center/:latlng/unit/:unit", tourController.GetToursWithin)
+			publicGroup.GET("/tours/distances/:latlng/unit/:unit", tourController.GetDistances)
 		}
 
-		// ========== PROTECTED ROUTES (Default rate limit - 100 per minute) ==========
+		// PROTECTED ROUTES (Default rate limit - 100 per minute)
 		protectedGroup := api.Group("/")
 		protectedGroup.Use(middleware.AuthMiddleware(jwtSecret))
 		protectedGroup.Use(middleware.DefaultLimiter)
@@ -172,7 +169,7 @@ func main() {
 			protectedGroup.GET("/bookings/checkout-session/:tourId", bookingController.GetCheckoutSession)
 		}
 
-		// ========== ADMIN ROUTES (Higher rate limit - 200 per minute) ==========
+		//  ADMIN ROUTES (Higher rate limit - 200 per minute)
 		adminGroup := api.Group("/")
 		adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
 		adminGroup.Use(middleware.AllowRoles("admin", "lead-guide"))

@@ -968,97 +968,6 @@
                 }
             }
         },
-        "/distances/{latlng}/unit/{unit}": {
-            "get": {
-                "description": "Calculates distance from latlng to each tour start point",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Tours"
-                ],
-                "summary": "Get distances from point to all tour starting locations",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Latitude and Longitude (lat,lng)",
-                        "name": "latlng",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Unit: 'mi' or 'km'",
-                        "name": "unit",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/utils.AppError"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/utils.AppError"
-                        }
-                    }
-                }
-            }
-        },
-        "/monthly-plan/{year}": {
-            "get": {
-                "description": "Calculates monthly schedule count for tours",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Tours"
-                ],
-                "summary": "Get monthly tour plan for a given year",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Year (e.g. 2026)",
-                        "name": "year",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/utils.AppError"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/utils.AppError"
-                        }
-                    }
-                }
-            }
-        },
         "/reviews": {
             "get": {
                 "description": "Get list of all reviews with pagination",
@@ -1257,7 +1166,97 @@
                 }
             }
         },
-        "/tours/stats": {
+        "/tours/distances/{latlng}/unit/{unit}": {
+            "get": {
+                "description": "Calculates distance from latlng to each tour start point",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tours"
+                ],
+                "summary": "Get distances from point to all tour starting locations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Latitude and Longitude (lat,lng)",
+                        "name": "latlng",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Unit: 'mi' or 'km'",
+                        "name": "unit",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/utils.AppError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/utils.AppError"
+                        }
+                    }
+                }
+            }
+        },
+        "/tours/monthly-plan/{year}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Calculates monthly schedule count for tours",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tours"
+                ],
+                "summary": "Get monthly tour plan for a given year",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Year (e.g. 2026)",
+                        "name": "year",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/utils.AppError"
+                        }
+                    }
+                }
+            }
+        },
+        "/tours/tour-stats": {
             "get": {
                 "description": "Calculates aggregated stats grouped by difficulty",
                 "produces": [

@@ -584,7 +584,7 @@ func (c *TourController) CleanupOrphanedImages(ctx *gin.Context) {
 // @Produce      json
 // @Success      200  {object}  map[string]interface{}
 // @Failure      500  {object}  utils.AppError
-// @Router       /tours/stats [get]
+// @Router       /tours/tour-stats [get]
 func (c *TourController) GetTourStats(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 
@@ -627,10 +627,10 @@ func (c *TourController) GetTourStats(ctx *gin.Context) {
 // @Tags         Tours
 // @Produce      json
 // @Param        year  path      int  true  "Year (e.g. 2026)"
+// @Security     Bearer
 // @Success      200   {object}  map[string]interface{}
-// @Failure      400   {object}  utils.AppError
 // @Failure      500   {object}  utils.AppError
-// @Router       /monthly-plan/{year} [get]
+// @Router       /tours/monthly-plan/{year} [get]
 func (c *TourController) GetMonthlyPlan(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 
@@ -769,7 +769,7 @@ func (c *TourController) GetToursWithin(ctx *gin.Context) {
 // @Success      200     {object}  map[string]interface{}
 // @Failure      400     {object}  utils.AppError
 // @Failure      500     {object}  utils.AppError
-// @Router       /distances/{latlng}/unit/{unit} [get]
+// @Router       /tours/distances/{latlng}/unit/{unit} [get]
 func (c *TourController) GetDistances(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 

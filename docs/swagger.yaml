@@ -931,67 +931,6 @@ paths:
       summary: Update user password
       tags:
       - auth
-  /distances/{latlng}/unit/{unit}:
-    get:
-      description: Calculates distance from latlng to each tour start point
-      parameters:
-      - description: Latitude and Longitude (lat,lng)
-        in: path
-        name: latlng
-        required: true
-        type: string
-      - description: 'Unit: ''mi'' or ''km'''
-        in: path
-        name: unit
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/utils.AppError'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/utils.AppError'
-      summary: Get distances from point to all tour starting locations
-      tags:
-      - Tours
-  /monthly-plan/{year}:
-    get:
-      description: Calculates monthly schedule count for tours
-      parameters:
-      - description: Year (e.g. 2026)
-        in: path
-        name: year
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/utils.AppError'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/utils.AppError'
-      summary: Get monthly tour plan for a given year
-      tags:
-      - Tours
   /reviews:
     get:
       description: Get list of all reviews with pagination
@@ -1236,7 +1175,66 @@ paths:
       summary: Update an existing tour
       tags:
       - Tours
-  /tours/stats:
+  /tours/distances/{latlng}/unit/{unit}:
+    get:
+      description: Calculates distance from latlng to each tour start point
+      parameters:
+      - description: Latitude and Longitude (lat,lng)
+        in: path
+        name: latlng
+        required: true
+        type: string
+      - description: 'Unit: ''mi'' or ''km'''
+        in: path
+        name: unit
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/utils.AppError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      summary: Get distances from point to all tour starting locations
+      tags:
+      - Tours
+  /tours/monthly-plan/{year}:
+    get:
+      description: Calculates monthly schedule count for tours
+      parameters:
+      - description: Year (e.g. 2026)
+        in: path
+        name: year
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/utils.AppError'
+      security:
+      - Bearer: []
+      summary: Get monthly tour plan for a given year
+      tags:
+      - Tours
+  /tours/tour-stats:
     get:
       description: Calculates aggregated stats grouped by difficulty
       produces:
